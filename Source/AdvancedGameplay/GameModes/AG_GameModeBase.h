@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AdvancedGameplay/AG_GameInstance.h"
 #include "GameFramework/GameModeBase.h"
 #include "AG_GameModeBase.generated.h"
 
@@ -13,6 +14,7 @@ UCLASS()
 class ADVANCEDGAMEPLAY_API AAG_GameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
+	AAG_GameModeBase();
 	virtual void Tick(float DeltaSeconds) override;
 
 protected:

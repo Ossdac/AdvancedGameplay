@@ -2,7 +2,6 @@
 
 
 #include "AG_GameModeBase.h"
-#include "AdvancedGameplay/AG_GameInstance.h"
 
 AAG_GameModeBase::AAG_GameModeBase()
 {
