@@ -23,6 +23,17 @@ void UAG_PlayAction::OnUpdate()
 			"Holy cow this is fun playing the game!"
 		);
 	}
+
+	UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC) { return; }
+
+	if (PC->WasInputKeyJustPressed(EKeys::BackSpace))
+	{
+		bDone = true; 
+	}
 }
 
 void UAG_PlayAction::OnEnd()
