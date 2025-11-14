@@ -14,16 +14,8 @@ AAG_GameModeBase::AAG_GameModeBase()
 void AAG_GameModeBase::BeginPlay()
 {
 	Super::BeginPlay();
+	
 	CachedGI = Cast<UAG_GameInstance>(GetGameInstance());
-	if (CachedGI)
-	{
-		UTestAction* Action = NewObject<UTestAction>(this);
-		Action->BeginText = TEXT("Hello from First Action");
-		Action->UpdateText = TEXT("Ticking First Action");
-		Action->Duration = 3.0f;
-
-		CachedGI->GetActionStack().PushAction(Action);
-	}
 }
 
 void AAG_GameModeBase::Tick(float DeltaSeconds)
