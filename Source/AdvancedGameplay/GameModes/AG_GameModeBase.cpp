@@ -3,7 +3,6 @@
 
 #include "AG_GameModeBase.h"
 
-#include "AdvancedGameplay/ActionStack/Actions/TestAction.h"
 
 AAG_GameModeBase::AAG_GameModeBase()
 {

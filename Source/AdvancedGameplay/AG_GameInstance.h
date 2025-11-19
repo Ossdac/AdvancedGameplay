@@ -17,5 +17,6 @@ public:
 	const FActionStack& GetActionStack() const { return ActionStack; }
 
 private:
+	UPROPERTY()
 	FActionStack ActionStack;
 };

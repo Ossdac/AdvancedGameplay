@@ -1,21 +1,8 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
+// FActionStack.cpp
 
 #include "FActionStack.h"
 
-
-FActionStack::~FActionStack()
-{
-	for (IAction* Action : Stack)
-	{
-		if (Action)
-		{
-			Action->OnEnd();
-		}
-	}
-}
-
-void FActionStack::PushAction(IAction* Action)
+void FActionStack::PushAction(UAG_ActionBase* Action)
 {
 	if (!Action)
 	{
@@ -37,9 +24,17 @@ void FActionStack::PushAction(IAction* Action)
 
 void FActionStack::UpdateActions()
 {
+	if (bIsUpdating)
+	{
+		return;
+	}
+
+	bIsUpdating = true;
+
 	if (Stack.Num() == 0)
 	{
 		CurrentAction = nullptr;
+		bIsUpdating = false;
 		return;
 	}
 
@@ -48,30 +43,48 @@ void FActionStack::UpdateActions()
 	{
 		CurrentAction = Stack.Last();
 
+		if (!IsValid(CurrentAction))
+		{
+			Stack.Pop();
+			CurrentAction = nullptr;
+			bIsUpdating = false;
+			return;
+		}
+
 		const bool bFirstTime = !FirstTimeActions.Contains(CurrentAction);
 		FirstTimeActions.Add(CurrentAction);
 
 		CurrentAction->OnBegin(bFirstTime);
 	}
 
+	if (!IsValid(CurrentAction))
+	{
+		CurrentAction = nullptr;
+		bIsUpdating = false;
+		return;
+	}
+
 	// OnUpdate may push/pop/change stack
-	IAction* ActionBeforeUpdate = CurrentAction;
+	UAG_ActionBase* ActionBeforeUpdate = CurrentAction;
 	CurrentAction->OnUpdate();
 
 	// If stack emptied or current is no longer top, reset and return
 	if (Stack.Num() == 0 || Stack.Last() != ActionBeforeUpdate)
 	{
 		CurrentAction = nullptr;
+		bIsUpdating = false;
 		return;
 	}
 
 	// If still top, check IsDone
 	if (CurrentAction->IsDone())
 	{
-		IAction* Finished = CurrentAction;
+		UAG_ActionBase* Finished = CurrentAction;
 		Stack.Pop(); // pop back
 		Finished->OnEnd();
 		FirstTimeActions.Remove(Finished);
 		CurrentAction = nullptr;
 	}
+
+	bIsUpdating = false;
 }

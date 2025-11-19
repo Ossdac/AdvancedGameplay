@@ -20,12 +20,18 @@ protected:
 
 	// Force contribution functions
 	void ApplyGravity(float FixedDeltaTime);
+	
+	// Collision response
+	void HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime);
+	
+	UFUNCTION(Blueprintable)
+	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
 
 	// Fixed-step config
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Fixed Step")
 	float FixedTimeStep = 1.0f / 60.0f;
 
-	// Mass (kg-ish, but in Unreal units it's really arbitrary; just be consistent)
+	// Mass
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
 	float Mass = 1.0f;
 
@@ -39,7 +45,25 @@ protected:
 
 	// Current velocity in cm/s
 	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
-	FVector Velocity = FVector::ZeroVector;
+	FVector Velocity = FVector(0.0f, 100.0f, .0f);
+	
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision")
+	UPrimitiveComponent* UpdatedComponent = nullptr;
+
+	// Enable or disable collision handling
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision")
+	bool bEnableCollision = true;
+
+	// 0 = no bounce, 1 = perfectly elastic
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision")
+	float Restitution = 0.0f;
+
+	// Coefficients for a simple friction model
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction")
+	float StaticFriction = 0.5f;
+
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction")
+	float DynamicFriction = 0.3f;
 
 	// Accumulated force for this step (N in “Unreal units”)
 	FVector AccumulatedForces = FVector::ZeroVector;

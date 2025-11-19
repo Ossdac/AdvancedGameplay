@@ -3,7 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "AdvancedGameplay/ActionStack/FActionStack.h"
+#include "AG_ActionBase.h"
 #include "UObject/Object.h"
 #include "AG_PlayAction.generated.h"
 
@@ -11,7 +11,7 @@
  * 
  */
 UCLASS()
-class ADVANCEDGAMEPLAY_API UAG_PlayAction : public UObject, public IAction
+class ADVANCEDGAMEPLAY_API UAG_PlayAction : public UAG_ActionBase
 {
 	GENERATED_BODY()
 

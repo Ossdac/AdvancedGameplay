@@ -1,19 +1,16 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AG_ActionBase.h"
 #include "UObject/Object.h"
-#include "AdvancedGameplay/ActionStack/FActionStack.h"
 #include "AG_MainMenuAction.generated.h"
 
 /*
  * Main Menu Action that acts as a root of the ActionStack
  */
 
-class UAG_GameInstance;
-class UAG_PlayAction; 
-
 UCLASS(Blueprintable)
-class ADVANCEDGAMEPLAY_API UAG_MainMenuAction : public UObject, public IAction
+class ADVANCEDGAMEPLAY_API UAG_MainMenuAction : public UAG_ActionBase
 {
 	GENERATED_BODY()
 
