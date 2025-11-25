@@ -26,13 +26,13 @@ void UAG_MainMenuAction::OnUpdate()
 	APlayerController* PC = World->GetFirstPlayerController();
 	if (!PC) { return; }
 
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			-1, .01f, FColor::Cyan,
-			TitleText
-		);
-	}
+	// if (GEngine)
+	// {
+	// 	GEngine->AddOnScreenDebugMessage(
+	// 		-1, .01f, FColor::Cyan,
+	// 		TitleText
+	// 	);
+	// }
 
 	if (PC->WasInputKeyJustPressed(EKeys::Enter))
 	{
