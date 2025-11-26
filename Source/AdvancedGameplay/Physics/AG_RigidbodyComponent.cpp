@@ -341,79 +341,32 @@ void UAG_RigidbodyComponent::ApplyAngularDrag()
 
 void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime)
 {
-	if (!UpdatedComponent)
+	if (!UpdatedComponent || Mass <= 0.0f)
 	{
 		return;
 	}
 
-	// Contact normal (unit, pointing out of the surface)
-	const FVector Normal = Hit.ImpactNormal.GetSafeNormal();
+	FAGContactData Contact;
+	if (!BuildContactData(Hit, Contact))
+	{
+		return;
+	}
 
-	const float UpDot = FVector::DotProduct(-GravityDirection, Normal);
-
+	// Grounded classification (same idea as before)
+	const float UpDot = FVector::DotProduct(-GravityDirection, Contact.Normal);
 	bIsGrounded = (UpDot >= GroundNormalCosThreshold);
 
-	// Velocity along the normal
-	const float vDotN = FVector::DotProduct(Velocity, Normal);
-
-	// Only resolve if we are moving *into* the surface
-	if (vDotN >= 0.0f)
+	// Only resolve if we are moving into the surface
+	if (Contact.VRelN >= 0.0f)
 	{
 		return;
 	}
 
-	// Decompose velocity into normal and tangential components
-	const FVector vN = vDotN * Normal; // normal component (into the surface, vDotN < 0)
-	FVector vT = Velocity - vN; // tangential (in the contact plane)
-
-	// --- Normal response (restitution) ---
-	// vN_after = -e * vN, where e = Restitution (0 = inelastic, 1 = elastic)
-	const FVector vN_after = -Restitution * vN;
-
-	// --- Tangential response: simple Coulomb-like dynamic + static friction ---
-
-	// Dynamic friction:
-	// Approximate a friction deceleration of a_f ≈ μ_k * g in cm/s^2.
-	// Here we use GravityStrength as "g" scale (980 ≈ 1g in Unreal units).
-	const float TangentSpeed = vT.Size();
-	if (TangentSpeed > UE_SMALL_NUMBER)
-	{
-		const float FrictionAccel = DynamicFrictionCoeff * GravityStrength; // cm/s^2
-		const float MaxSpeedDrop = FrictionAccel * FixedDeltaTime; // cm/s this step
-
-		if (TangentSpeed <= MaxSpeedDrop)
-		{
-			// Friction can stop tangential motion this step
-			vT = FVector::ZeroVector;
-		}
-		else
-		{
-			// Reduce tangential speed by MaxSpeedDrop along tangent direction
-			const FVector TangentDir = vT / TangentSpeed;
-			vT -= TangentDir * MaxSpeedDrop;
-		}
-	}
-
-	// Static friction snap near zero:
-	// Treat StaticFriction as a small speed threshold in cm/s for now.
-	if (vT.Size() < StaticFrictionSpeedThreshold)
-	{
-		vT = FVector::ZeroVector;
-	}
-
-	// Recombine to new velocity
-	Velocity = vT + vN_after;
-
-	// --- Resting contact normal clamp to kill tiny jitter ---
-	const float NewVDotN = FVector::DotProduct(Velocity, Normal);
-	const float NormalRestThreshold = 1.0f; // cm/s; tune to taste
-
-	if (FMath::Abs(NewVDotN) < NormalRestThreshold)
-	{
-		// Remove tiny normal motion completely so we don't "buzz" on the surface
-		Velocity -= NewVDotN * Normal;
-	}
+	ApplyNormalImpulse(Contact);
+	ApplyFrictionImpulse(Contact);
+	ClampContactNormalRestVelocity(Contact);
 }
+
 
 
 void UAG_RigidbodyComponent::UpdateSleepState()
@@ -449,3 +402,191 @@ void UAG_RigidbodyComponent::UpdateSleepState()
 void UAG_RigidbodyComponent::ApplyAngularSleepClamp()
 {
 }
+
+bool UAG_RigidbodyComponent::BuildContactData(
+	const FHitResult& Hit,
+	FAGContactData& OutData
+) const
+{
+	if (!UpdatedComponent || Mass <= 0.0f)
+	{
+		return false;
+	}
+
+	// Normal
+	const FVector Normal = Hit.ImpactNormal.GetSafeNormal();
+	if (Normal.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector ComPos = UpdatedComponent->GetComponentLocation();
+
+	// Contact point: prefer ImpactPoint, fall back to COM if degenerate
+	FVector ContactPoint = Hit.ImpactPoint;
+	if (ContactPoint.IsNearlyZero())
+	{
+		ContactPoint = ComPos;
+	}
+
+	const FVector R = ContactPoint - ComPos;
+
+	// Contact velocity: v_c = v + ω × r
+	const FVector VContact = Velocity + FVector::CrossProduct(AngularVelocity, R);
+
+	const float VRelN = FVector::DotProduct(VContact, Normal);
+
+	OutData.Normal       = Normal;
+	OutData.ContactPoint = ContactPoint;
+	OutData.R            = R;
+	OutData.VContact     = VContact;
+	OutData.VRelN        = VRelN;
+	OutData.NormalImpulse = 0.0f;
+
+	return true;
+}
+
+
+void UAG_RigidbodyComponent::ApplyNormalImpulse(FAGContactData& Contact)
+{
+	// v_rel_n_before
+	const float vRelN = Contact.VRelN;
+
+	// Desired post-impact normal relative velocity: v'_rel_n = -e v_rel_n
+	const float e = FMath::Clamp(Restitution, 0.0f, 1.0f);
+	const float desiredRelN = -e * vRelN;
+	const float deltaRelN   = desiredRelN - vRelN; // = -(1+e) * vRelN
+
+	// Effective inverse mass along the normal:
+	// 1/m + ((r × n)^2 / I) for scalar inertia
+	const FVector rCrossN      = FVector::CrossProduct(Contact.R, Contact.Normal);
+	const float   rCrossNLenSq = rCrossN.SizeSquared();
+
+	float invEffMassN = 1.0f / Mass;
+	if (bEnableRotation && InertiaScalar > 0.0f)
+	{
+		invEffMassN += rCrossNLenSq / InertiaScalar;
+	}
+
+	if (invEffMassN <= SMALL_NUMBER)
+	{
+		Contact.NormalImpulse = 0.0f;
+		return;
+	}
+
+	// Scalar normal impulse
+	float jN = deltaRelN / invEffMassN;
+
+	// Only allow impulse pushing us out of the surface
+	if (jN < 0.0f)
+	{
+		jN = 0.0f;
+	}
+
+	Contact.NormalImpulse = jN;
+
+	if (jN == 0.0f)
+	{
+		return;
+	}
+
+	const FVector ImpulseN = jN * Contact.Normal;
+
+	// Linear
+	Velocity += ImpulseN / Mass;
+
+	// Angular
+	if (bEnableRotation && InertiaScalar > 0.0f)
+	{
+		const FVector dOmegaN = FVector::CrossProduct(Contact.R, ImpulseN) / InertiaScalar;
+		AngularVelocity += dOmegaN;
+	}
+}
+
+
+void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact)
+{
+	if (DynamicFrictionCoeff <= 0.0f || Mass <= 0.0f)
+	{
+		return;
+	}
+
+	if (Contact.NormalImpulse <= SMALL_NUMBER)
+	{
+		// No normal impulse → no friction (Coulomb model)
+		return;
+	}
+
+	// Recompute contact velocity after the normal impulse
+	const FVector VContactAfterN =
+		Velocity + FVector::CrossProduct(AngularVelocity, Contact.R);
+
+	// Remove normal component => tangential relative velocity
+	const float   vRelN_after = FVector::DotProduct(VContactAfterN, Contact.Normal);
+	const FVector vT          = VContactAfterN - vRelN_after * Contact.Normal;
+	const float   vTLen       = vT.Size();
+
+	if (vTLen <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector TangentDir = vT / vTLen;
+
+	// Effective inverse mass along tangent
+	const FVector rCrossT      = FVector::CrossProduct(Contact.R, TangentDir);
+	const float   rCrossTLenSq = rCrossT.SizeSquared();
+
+	float invEffMassT = 1.0f / Mass;
+	if (bEnableRotation && InertiaScalar > 0.0f)
+	{
+		invEffMassT += rCrossTLenSq / InertiaScalar;
+	}
+
+	if (invEffMassT <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Impulse that would fully cancel tangential contact velocity
+	float jT = -vTLen / invEffMassT;
+
+	// Coulomb clamp: |j_t| ≤ μ * j_n
+	const float maxFrictionImpulse = DynamicFrictionCoeff * Contact.NormalImpulse;
+	jT = FMath::Clamp(jT, -maxFrictionImpulse, maxFrictionImpulse);
+
+	if (FMath::IsNearlyZero(jT))
+	{
+		return;
+	}
+
+	const FVector ImpulseT = jT * TangentDir;
+
+	// Apply linear
+	Velocity += ImpulseT / Mass;
+
+	// Apply angular
+	if (bEnableRotation && InertiaScalar > 0.0f)
+	{
+		const FVector dOmegaT = FVector::CrossProduct(Contact.R, ImpulseT) / InertiaScalar;
+		AngularVelocity += dOmegaT;
+	}
+}
+
+
+void UAG_RigidbodyComponent::ClampContactNormalRestVelocity(FAGContactData& Contact)
+{
+	// Recompute contact velocity with both impulses applied
+	const FVector VContactFinal =
+		Velocity + FVector::CrossProduct(AngularVelocity, Contact.R);
+
+	const float vRelN_final = FVector::DotProduct(VContactFinal, Contact.Normal);
+
+	const float NormalRestThreshold = 1.0f; // cm/s, tune to taste
+	if (FMath::Abs(vRelN_final) < NormalRestThreshold)
+	{
+		// Approx: remove normal component from linear velocity only
+		Velocity -= vRelN_final * Contact.Normal;
+	}
+}
+

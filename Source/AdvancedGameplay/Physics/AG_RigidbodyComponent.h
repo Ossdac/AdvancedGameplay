@@ -6,6 +6,21 @@
 
 class UPrimitiveComponent;
 
+USTRUCT()
+struct FAGContactData
+{
+	GENERATED_BODY()
+	
+	FVector Normal = FVector::ZeroVector;       // unit
+	FVector ContactPoint = FVector::ZeroVector; // world
+	FVector R = FVector::ZeroVector;            // ContactPoint - COM
+	FVector VContact = FVector::ZeroVector;     // v + ω × r
+	float   VRelN = 0.0f;                       // VContact · Normal
+
+	// Cached scalar normal impulse for friction to use (Coulomb limit)
+	float   NormalImpulse = 0.0f;
+};
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class ADVANCEDGAMEPLAY_API UAG_RigidbodyComponent : public UActorComponent
 {
@@ -30,7 +45,6 @@ public:
 	void AddTorque(const FVector& Torque);
 
 protected:
-	// Lifecycle
 	virtual void BeginPlay() override;
 
 	// Fixed-step "physics" update
@@ -166,6 +180,11 @@ protected:
 	FVector AccumulatedTorque = FVector::ZeroVector;
 
 private:
+	// Contact helpers (split out of HandleBlockingHit)
+	bool BuildContactData(const FHitResult& Hit, FAGContactData& OutData) const;
+	void ApplyNormalImpulse(FAGContactData& Contact);
+	void ApplyFrictionImpulse(FAGContactData& Contact);
+	void ClampContactNormalRestVelocity(FAGContactData& Contact);
 	// Accumulated time since last fixed-step tick
 	float TimeAccumulator = 0.0f;
 };
