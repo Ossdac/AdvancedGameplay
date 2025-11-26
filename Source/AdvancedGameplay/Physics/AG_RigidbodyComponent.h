@@ -4,6 +4,8 @@
 #include "Components/ActorComponent.h"
 #include "AG_RigidbodyComponent.generated.h"
 
+class UPrimitiveComponent;
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class ADVANCEDGAMEPLAY_API UAG_RigidbodyComponent : public UActorComponent
 {
@@ -12,28 +14,49 @@ class ADVANCEDGAMEPLAY_API UAG_RigidbodyComponent : public UActorComponent
 public:
 	UAG_RigidbodyComponent();
 
+	// Main per-frame entry point
+	virtual void TickComponent(
+		float DeltaTime,
+		enum ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction
+	) override;
+
+	// External API: forces / torques / component binding
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody")
+	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
+
+	// API for external systems to push forces and torques
+	void AddForce(const FVector& Force);
+	void AddTorque(const FVector& Torque);
+
 protected:
+	// Lifecycle
 	virtual void BeginPlay() override;
-	
+
 	// Fixed-step "physics" update
-	UFUNCTION()
 	void FixedUpdate(float FixedDeltaTime);
 
-	// Force contribution functions
-	UFUNCTION()
-	void ApplyGravity();
-	UFUNCTION()
-	void ApplyDragForce();
+	// Integration pipeline
+	void IntegrateForces();                  
+	void IntegrateVelocity(float FixedDeltaTime);
+	void IntegrateAngularVelocity(float FixedDeltaTime);
+	void DoMovementAndCollisions(float FixedDeltaTime);
 
-	// Collision response
-	UFUNCTION()
+	// Force contribution functions
+	void ApplyGravity();
+	void ApplyDragForce();
+	void ApplyAngularDrag();
+
+	// Collision response + sleeping
 	void HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime);
-	
-	UFUNCTION(Blueprintable)
-	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
-	
-	UFUNCTION()
 	void UpdateSleepState();
+
+	// Optionally clamp tiny angular motion when resting (not yet used)
+	void ApplyAngularSleepClamp(); // stub / future use
+
+	// ------------------------------------------------------------------------------------
+	// CONFIGURATION / TUNABLES
+	// ------------------------------------------------------------------------------------
 
 	// Fixed-step config
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Fixed Step")
@@ -51,10 +74,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
 	FVector GravityDirection = FVector(0.0f, 0.0f, -1.0f);
 
-	// Current velocity in cm/s
-	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Runtime")
-	FVector Velocity = FVector(0.0f, 0.0f, .0f);
-	
+	// Component we drive
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision")
 	UPrimitiveComponent* UpdatedComponent = nullptr;
 
@@ -66,38 +86,47 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision")
 	float Restitution = 0.0f;
 
-	// Coefficients for a simple friction model
+	// Friction model (velocity-based)
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction")
-	float StaticFrictionSpeedThreshold  = 0.5f;
+	float StaticFrictionSpeedThreshold = 0.5f;
 
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction")
-	float DynamicFrictionCoeff  = 0.3f;
-	
+	float DynamicFrictionCoeff = 0.3f;
+
+	// Solver parameters
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Solver")
-	int32 MaxContactIterations = 4; 
-	
-	// Linear "viscous" drag: F_drag_linear = -LinearDragCoeff * v
+	int32 MaxContactIterations = 4;
+
+	// Linear damping / drag
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Damping")
 	float LinearDragCoeff = 0.0f;
 
-	// Quadratic drag: F_drag_quad = -QuadraticDragCoeff * |v| * v
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Damping")
 	float QuadraticDragCoeff = 0.0f;
-	
+
+	// --- Rotation / angular dynamics ---
+
+	// Enable simple angular motion
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Angular")
+	bool bEnableRotation = true;
+
+	// Scalar moment of inertia about any axis (for spheres: 0.4 * m * r^2)
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Angular")
+	float InertiaScalar = 1.0f;
+
+	// Simple angular damping (like linear drag but for spin)
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Angular")
+	float AngularDragCoeff = 0.0f;
+
 	// --- Sleeping / grounded state ---
 
-	// Are we currently treated as resting on a "ground-like" surface this step?
-	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Sleeping")
-	bool bIsGrounded = false;
-
-	// Are we currently sleeping (simulation skipped)?
-	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Sleeping")
-	bool bSleeping = false;
-
+	// Enable sleeping behavior
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
+	bool bCanSleep = true;
 	// Cosine threshold for treating a contact normal as "ground" relative to gravity.
 	// Dot(-GravityDirection, Normal) >= GroundNormalCosThreshold → considered ground.
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
-	float GroundNormalCosThreshold = 0.6f; // ~> max ~53° slope
+	float GroundNormalCosThreshold = 0.6f;
 
 	// Below this linear speed (cm/s) while grounded, we consider the body "at rest".
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
@@ -107,24 +136,36 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
 	int32 MinFramesAtRest = 5;
 
+	// ------------------------------------------------------------------------------------
+	// RUNTIME STATE
+	// ------------------------------------------------------------------------------------
+
+	// Current linear velocity in cm/s
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Runtime")
+	FVector Velocity = FVector::ZeroVector;
+
+	// World-space angular velocity [rad/s]
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Runtime")
+	FVector AngularVelocity = FVector::ZeroVector;
+
+	// Is this body currently resting on something "ground-like"?
+	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
+	bool bIsGrounded = false;
+
+	// Are we currently sleeping (simulation skipped)?
+	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
+	bool bSleeping = false;
+
+	// Frames we have been within sleep thresholds while grounded
 	int32 FramesAtRest = 0;
-	
-	// Accumulated force for this step (N in “Unreal units”)
+
+	// Accumulated force for this step
 	FVector AccumulatedForces = FVector::ZeroVector;
 
+	// Accumulated torque for this step
+	FVector AccumulatedTorque = FVector::ZeroVector;
+
 private:
+	// Accumulated time since last fixed-step tick
 	float TimeAccumulator = 0.0f;
-
-public:
-	virtual void TickComponent(
-		float DeltaTime,
-		enum ELevelTick TickType,
-		FActorComponentTickFunction* ThisTickFunction
-	) override;
-	void IntegrateForces();
-	void IntegrateVelocity(float FixedDeltaTime);
-	void DoMovementAndCollisions(float FixedDeltaTime);
-
-	// API for external systems to push forces
-	void AddForce(const FVector& Force);
 };

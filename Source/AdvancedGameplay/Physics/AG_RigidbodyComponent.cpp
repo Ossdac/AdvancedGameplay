@@ -8,6 +8,62 @@ UAG_RigidbodyComponent::UAG_RigidbodyComponent()
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 }
 
+void UAG_RigidbodyComponent::TickComponent(
+	float DeltaTime,
+	enum ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction
+)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	TimeAccumulator += DeltaTime;
+
+	constexpr int32 MaxSubSteps = 100;
+	int32 NumSteps = 0;
+
+	while (TimeAccumulator >= FixedTimeStep && NumSteps < MaxSubSteps)
+	{
+		FixedUpdate(FixedTimeStep);
+		TimeAccumulator -= FixedTimeStep;
+		++NumSteps;
+	}
+}
+
+
+void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
+{
+	if (bEnableCollision && NewUpdatedComponent)
+	{
+		NewUpdatedComponent->SetSimulatePhysics(false);
+		NewUpdatedComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		UpdatedComponent = NewUpdatedComponent;
+	}
+}
+
+void UAG_RigidbodyComponent::AddForce(const FVector& Force)
+{
+	if (!Force.IsNearlyZero())
+	{
+		// Any explicit external force wakes the body
+		bSleeping = false;
+		FramesAtRest = 0;
+	}
+
+	AccumulatedForces += Force;
+}
+
+void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
+{
+	if (!Torque.IsNearlyZero())
+	{
+		// Any explicit torque wakes the body
+		bSleeping    = false;
+		FramesAtRest = 0;
+	}
+
+	AccumulatedTorque += Torque;
+}
+
 void UAG_RigidbodyComponent::BeginPlay()
 {
 	Super::BeginPlay();
@@ -58,31 +114,45 @@ void UAG_RigidbodyComponent::BeginPlay()
 }
 
 
-void UAG_RigidbodyComponent::TickComponent(
-	float DeltaTime,
-	enum ELevelTick TickType,
-	FActorComponentTickFunction* ThisTickFunction
-)
+void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 {
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	TimeAccumulator += DeltaTime;
-
-	constexpr int32 MaxSubSteps = 100;
-	int32 NumSteps = 0;
-
-	while (TimeAccumulator >= FixedTimeStep && NumSteps < MaxSubSteps)
+	if (bSleeping)
 	{
-		FixedUpdate(FixedTimeStep);
-		TimeAccumulator -= FixedTimeStep;
-		++NumSteps;
+		return;
 	}
+
+	bIsGrounded = false;
+
+	IntegrateForces();
+	IntegrateVelocity(FixedDeltaTime);
+	IntegrateAngularVelocity(FixedDeltaTime);
+
+	DoMovementAndCollisions(FixedDeltaTime);
+
+	if (bEnableRotation && UpdatedComponent)
+	{
+		const float Angle = AngularVelocity.Size() * FixedDeltaTime;
+		if (Angle > KINDA_SMALL_NUMBER)
+		{
+			const FVector Axis = AngularVelocity.GetSafeNormal();
+			const FQuat   DeltaRot(Axis, Angle);
+			UpdatedComponent->AddWorldRotation(DeltaRot, false);
+		}
+	}
+
+	UpdateSleepState();
+
+	AccumulatedForces = FVector::ZeroVector;
+	AccumulatedTorque = FVector::ZeroVector;
 }
+
+
 
 void UAG_RigidbodyComponent::IntegrateForces()
 {
 	ApplyGravity();
 	ApplyDragForce();
+	ApplyAngularDrag();
 }
 
 void UAG_RigidbodyComponent::IntegrateVelocity(float FixedDeltaTime)
@@ -92,6 +162,20 @@ void UAG_RigidbodyComponent::IntegrateVelocity(float FixedDeltaTime)
 
 	// Semi-implicit Euler integration
 	Velocity += Acceleration * FixedDeltaTime;
+}
+
+void UAG_RigidbodyComponent::IntegrateAngularVelocity(float FixedDeltaTime)
+{
+	if (!bEnableRotation || InertiaScalar <= 0.0f)
+	{
+		return;
+	}
+
+	// α = τ / I
+	const FVector AngularAcceleration = AccumulatedTorque / InertiaScalar;
+
+	// Semi-implicit Euler for rotation: ω_{n+1} = ω_n + α Δt
+	AngularVelocity += AngularAcceleration * FixedDeltaTime;
 }
 
 void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
@@ -209,28 +293,6 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 	}
 }
 
-
-void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
-{
-	if (bSleeping)
-	{
-		return;
-	}
-
-	bIsGrounded = false;
-
-	IntegrateForces();
-
-	IntegrateVelocity(FixedDeltaTime);
-
-	DoMovementAndCollisions(FixedDeltaTime);
-
-	UpdateSleepState();
-
-	AccumulatedForces = FVector::ZeroVector;
-}
-
-
 void UAG_RigidbodyComponent::ApplyGravity()
 {
 	// Gravity is a constant acceleration -> treat as force: F = m * g
@@ -259,16 +321,22 @@ void UAG_RigidbodyComponent::ApplyDragForce()
 	AccumulatedForces += DragForce;
 }
 
-void UAG_RigidbodyComponent::AddForce(const FVector& Force)
+void UAG_RigidbodyComponent::ApplyAngularDrag()
 {
-	if (!Force.IsNearlyZero())
+	if (!bEnableRotation || AngularDragCoeff <= 0.0f)
 	{
-		// Any explicit external force wakes the body
-		bSleeping = false;
-		FramesAtRest = 0;
+		return;
 	}
 
-	AccumulatedForces += Force;
+	const float Omega = AngularVelocity.Size();
+	if (Omega < KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Very simple linear angular drag: τ = -c * ω
+	const FVector DragTorque = -AngularDragCoeff * AngularVelocity;
+	AccumulatedTorque += DragTorque;
 }
 
 void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime)
@@ -348,18 +416,12 @@ void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float Fixe
 }
 
 
-void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
-{
-	if (bEnableCollision && NewUpdatedComponent)
-	{
-		NewUpdatedComponent->SetSimulatePhysics(false);
-		NewUpdatedComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		UpdatedComponent = NewUpdatedComponent;
-	}
-}
-
 void UAG_RigidbodyComponent::UpdateSleepState()
 {
+	if (!bCanSleep)
+	{
+		return;
+	}
 	const float SpeedSq = Velocity.SizeSquared();
 	const float SleepSpeedSq = SleepLinearSpeedThreshold * SleepLinearSpeedThreshold;
 
@@ -382,4 +444,8 @@ void UAG_RigidbodyComponent::UpdateSleepState()
 		FramesAtRest = 0;
 		bSleeping = false;
 	}
+}
+
+void UAG_RigidbodyComponent::ApplyAngularSleepClamp()
+{
 }
