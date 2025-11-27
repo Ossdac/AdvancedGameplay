@@ -141,17 +141,7 @@ void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 	IntegrateAngularVelocity(FixedDeltaTime);
 
 	DoMovementAndCollisions(FixedDeltaTime);
-
-	if (bEnableRotation && UpdatedComponent)
-	{
-		const float Angle = AngularVelocity.Size() * FixedDeltaTime;
-		if (Angle > KINDA_SMALL_NUMBER)
-		{
-			const FVector Axis = AngularVelocity.GetSafeNormal();
-			const FQuat   DeltaRot(Axis, Angle);
-			UpdatedComponent->AddWorldRotation(DeltaRot, false);
-		}
-	}
+	ApplyRotation(FixedDeltaTime);
 
 	UpdateSleepState();
 
@@ -422,6 +412,24 @@ void UAG_RigidbodyComponent::UpdateSleepState()
 
 void UAG_RigidbodyComponent::ApplyAngularSleepClamp()
 {
+}
+
+void UAG_RigidbodyComponent::ApplyRotation(float FixedDeltaTime)
+{
+	if (!bEnableRotation || !UpdatedComponent)
+	{
+		return;
+	}
+
+	const float Angle = AngularVelocity.Size() * FixedDeltaTime;
+	if (Angle <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector Axis = AngularVelocity.GetSafeNormal();
+	const FQuat   DeltaRot(Axis, Angle);
+	UpdatedComponent->AddWorldRotation(DeltaRot, false);
 }
 
 bool UAG_RigidbodyComponent::BuildContactData(

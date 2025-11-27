@@ -180,6 +180,9 @@ protected:
 	FVector AccumulatedTorque = FVector::ZeroVector;
 
 private:
+	// Rotation application (post-collision)
+	void ApplyRotation(float FixedDeltaTime);
+	
 	// Contact helpers (split out of HandleBlockingHit)
 	bool BuildContactData(const FHitResult& Hit, FAGContactData& OutData) const;
 	void ApplyNormalImpulse(FAGContactData& Contact);
