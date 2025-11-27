@@ -104,6 +104,12 @@ void UAG_RigidbodyComponent::BeginPlay()
 			}
 		}
 	}
+	
+	if (InertiaScalar <= 0.0f && UpdatedComponent)
+	{
+		const float Radius = UpdatedComponent->Bounds.SphereRadius; // good enough
+		InertiaScalar = 0.4f * Mass * Radius * Radius; // solid sphere approx
+	}
 
 	// Make sure physics is not being simulated by Chaos on this component
 	if (UpdatedComponent && bEnableCollision)
@@ -116,9 +122,16 @@ void UAG_RigidbodyComponent::BeginPlay()
 
 void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 {
-	if (bSleeping)
+	// Skip simulation if sleeping
+	// TODO: No need to check bCanSleep here after debugging done
+	if (bSleeping && bCanSleep)
 	{
 		return;
+	}
+	// Only for debugging purposes: if sleeping is disabled, never sleep
+	if (!bCanSleep)
+	{
+		bSleeping = false;
 	}
 
 	bIsGrounded = false;
@@ -285,6 +298,8 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 			// Slid freely, done for this step
 			break;
 		}
+		
+		HandleBlockingHit(SlideHit, SlideDeltaTime);
 
 		// Hit something while sliding: small depenetration and let next iteration
 		// treat this (new) contact as the primary hit.
@@ -352,20 +367,26 @@ void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float Fixe
 		return;
 	}
 
-	// Grounded classification (same idea as before)
+	// Grounded classification
 	const float UpDot = FVector::DotProduct(-GravityDirection, Contact.Normal);
 	bIsGrounded = (UpDot >= GroundNormalCosThreshold);
 
-	// Only resolve if we are moving into the surface
-	if (Contact.VRelN >= 0.0f)
+	// Threshold for "real" impact into the surface
+	const float NormalImpactThreshold = 1.0f; // cm/s, tune if needed
+
+	// If we're significantly moving into the surface -> do a full normal impulse
+	if (Contact.VRelN < -NormalImpactThreshold)
 	{
-		return;
+		ApplyNormalImpulse(Contact);
 	}
 
-	ApplyNormalImpulse(Contact);
-	ApplyFrictionImpulse(Contact);
+	// Always try friction when we have tangential slip (impact or resting contact)
+	ApplyFrictionImpulse(Contact, FixedDeltaTime, UpDot);
+
+	// Small normal clamp to kill jitter
 	ClampContactNormalRestVelocity(Contact);
 }
+
 
 
 
@@ -504,30 +525,51 @@ void UAG_RigidbodyComponent::ApplyNormalImpulse(FAGContactData& Contact)
 }
 
 
-void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact)
+void UAG_RigidbodyComponent::ApplyFrictionImpulse(
+	FAGContactData& Contact,
+	float FixedDeltaTime,
+	float UpDot
+)
 {
 	if (DynamicFrictionCoeff <= 0.0f || Mass <= 0.0f)
 	{
 		return;
 	}
 
-	if (Contact.NormalImpulse <= SMALL_NUMBER)
+	// --------------------------------------------------------------------
+	// 1) Decide what "normal impulse" we use as the Coulomb cap
+	// --------------------------------------------------------------------
+
+	// Case A: impact frame – we already computed a real normal impulse
+	float EffectiveNormalImpulse = Contact.NormalImpulse;
+
+	// Case B: no impact impulse (resting / sliding contact), but we're grounded.
+	// Approximate normal impulse for this step as m * g * dt * UpDot.
+	if (EffectiveNormalImpulse <= SMALL_NUMBER && bIsGrounded && UpDot > 0.0f)
 	{
-		// No normal impulse → no friction (Coulomb model)
+		const float NormalForce = Mass * GravityStrength * UpDot;           // ~ N
+		EffectiveNormalImpulse = NormalForce * FixedDeltaTime;              // N·s (impulse)
+	}
+
+	if (EffectiveNormalImpulse <= SMALL_NUMBER)
+	{
+		// No meaningful normal support -> no friction (Coulomb model)
 		return;
 	}
 
-	// Recompute contact velocity after the normal impulse
-	const FVector VContactAfterN =
+	// --------------------------------------------------------------------
+	// 2) Compute tangential relative velocity at the contact
+	// --------------------------------------------------------------------
+	const FVector VContact =
 		Velocity + FVector::CrossProduct(AngularVelocity, Contact.R);
 
-	// Remove normal component => tangential relative velocity
-	const float   vRelN_after = FVector::DotProduct(VContactAfterN, Contact.Normal);
-	const FVector vT          = VContactAfterN - vRelN_after * Contact.Normal;
-	const float   vTLen       = vT.Size();
+	const float   vRelN = FVector::DotProduct(VContact, Contact.Normal);
+	const FVector vT    = VContact - vRelN * Contact.Normal;
+	const float   vTLen = vT.Size();
 
 	if (vTLen <= KINDA_SMALL_NUMBER)
 	{
+		// No slip -> no dynamic friction
 		return;
 	}
 
@@ -548,11 +590,15 @@ void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact)
 		return;
 	}
 
-	// Impulse that would fully cancel tangential contact velocity
+	// --------------------------------------------------------------------
+	// 3) Impulse that tries to kill tangential velocity, but Coulomb-clamped
+	// --------------------------------------------------------------------
+
+	// j_t that would zero v_t
 	float jT = -vTLen / invEffMassT;
 
-	// Coulomb clamp: |j_t| ≤ μ * j_n
-	const float maxFrictionImpulse = DynamicFrictionCoeff * Contact.NormalImpulse;
+	// Coulomb limit: |j_t| ≤ μ * EffectiveNormalImpulse
+	const float maxFrictionImpulse = DynamicFrictionCoeff * EffectiveNormalImpulse;
 	jT = FMath::Clamp(jT, -maxFrictionImpulse, maxFrictionImpulse);
 
 	if (FMath::IsNearlyZero(jT))
@@ -572,6 +618,7 @@ void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact)
 		AngularVelocity += dOmegaT;
 	}
 }
+
 
 
 void UAG_RigidbodyComponent::ClampContactNormalRestVelocity(FAGContactData& Contact)

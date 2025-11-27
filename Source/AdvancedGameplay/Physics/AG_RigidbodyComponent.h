@@ -183,8 +183,7 @@ private:
 	// Contact helpers (split out of HandleBlockingHit)
 	bool BuildContactData(const FHitResult& Hit, FAGContactData& OutData) const;
 	void ApplyNormalImpulse(FAGContactData& Contact);
-	void ApplyFrictionImpulse(FAGContactData& Contact);
-	void ClampContactNormalRestVelocity(FAGContactData& Contact);
+	void ApplyFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot);	void ClampContactNormalRestVelocity(FAGContactData& Contact);
 	// Accumulated time since last fixed-step tick
 	float TimeAccumulator = 0.0f;
 };
