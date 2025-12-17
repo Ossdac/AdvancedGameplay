@@ -21,6 +21,19 @@ struct FAGContactData
 	float   NormalImpulse = 0.0f;
 };
 
+USTRUCT()
+struct FAGTwoBodyContactData
+{
+	GENERATED_BODY()
+
+	FVector Normal       = FVector::ZeroVector;   // unit
+	FVector ContactPoint = FVector::ZeroVector;   // world
+	FVector R1           = FVector::ZeroVector;   // from body 1 COM to contact
+	FVector R2           = FVector::ZeroVector;   // from body 2 COM to contact
+	FVector VRel         = FVector::ZeroVector;   // V1c - V2c at contact
+	float   VRelN        = 0.0f;                  // dot(VRel, Normal)
+};
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class ADVANCEDGAMEPLAY_API UAG_RigidbodyComponent : public UActorComponent
 {
@@ -39,10 +52,25 @@ public:
 	// External API: forces / torques / component binding
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody")
 	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
-
+	
+	// Set gravity direction (will be normalized internally).
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody")
+	void SetGravityDirection(
+		const FVector& NewGravityDirection,
+		float NewGravityStrength = 980.0f,
+		bool bNormalize = true,
+		bool bWakeUp = true
+	);
+	
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody")
+	void AdjustGravityFromContactNormal(bool bNormalize = true, bool bWakeUp = false);
+	
 	// API for external systems to push forces and torques
 	void AddForce(const FVector& Force);
 	void AddTorque(const FVector& Torque);
+	
+	// Wake the body from sleep
+	void WakeUp();
 
 protected:
 	virtual void BeginPlay() override;
@@ -65,9 +93,6 @@ protected:
 	void HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime);
 	void UpdateSleepState();
 
-	// Optionally clamp tiny angular motion when resting (not yet used)
-	void ApplyAngularSleepClamp(); // stub / future use
-
 	// ------------------------------------------------------------------------------------
 	// CONFIGURATION / TUNABLES
 	// ------------------------------------------------------------------------------------
@@ -75,6 +100,10 @@ protected:
 	// Fixed-step config
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Fixed Step")
 	float FixedTimeStep = 1.0f / 60.0f;
+	
+	// Assume spherical shape for inertia calculation if no component is assigned
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
+	bool bAssumeSphere = true; 
 
 	// Mass
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
@@ -83,6 +112,11 @@ protected:
 	// Gravity strength in cm/s^2 (980 ~= 1g in Unreal units)
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
 	float GravityStrength = 980.0f;
+	
+	// If true, when grounded we gradually align gravity to the ground normal
+	// (for twisting walkways / planets etc.)
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
+	bool bAdjustGravityToGround = false;
 
 	// Normalized gravity direction
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Variables")
@@ -145,6 +179,10 @@ protected:
 	// Below this linear speed (cm/s) while grounded, we consider the body "at rest".
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
 	float SleepLinearSpeedThreshold = 1.0f;
+	
+	// Below this angular speed (rad/s) while grounded, we consider the body "at rest".
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
+	float SleepAngularSpeedThreshold = 0.1f;
 
 	// Number of consecutive frames at rest before actually going to sleep.
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping")
@@ -165,6 +203,14 @@ protected:
 	// Is this body currently resting on something "ground-like"?
 	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
 	bool bIsGrounded = false;
+	
+	// Was a valid ground normal recorded recently?
+	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
+	bool bHasLastGroundNormal = false;
+
+	// Last ground normal we considered "ground-like"
+	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
+	FVector LastGroundNormal = FVector(0.0f, 0.0f, 1.0f);
 
 	// Are we currently sleeping (simulation skipped)?
 	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
@@ -180,6 +226,8 @@ protected:
 	FVector AccumulatedTorque = FVector::ZeroVector;
 
 private:
+	
+	float CachedRadius = 0.0f;
 	// Rotation application (post-collision)
 	void ApplyRotation(float FixedDeltaTime);
 	
@@ -187,6 +235,14 @@ private:
 	bool BuildContactData(const FHitResult& Hit, FAGContactData& OutData) const;
 	void ApplyNormalImpulse(FAGContactData& Contact);
 	void ApplyFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot);	void ClampContactNormalRestVelocity(FAGContactData& Contact);
+	
+	void HandleBodyBodyContact(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, float FixedDeltaTime);
+	// Contact helpers (body vs body)
+	bool BuildBodyBodyContactData(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, FAGTwoBodyContactData&  OutData) const;
+
+	void ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* OtherBody, FAGTwoBodyContactData&  Contact);
+	
+	
 	// Accumulated time since last fixed-step tick
 	float TimeAccumulator = 0.0f;
 };
