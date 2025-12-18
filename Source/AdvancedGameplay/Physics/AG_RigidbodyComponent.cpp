@@ -1,4 +1,5 @@
 #include "AG_RigidbodyComponent.h"
+
 #include "GameFramework/Actor.h"
 
 UAG_RigidbodyComponent::UAG_RigidbodyComponent()
@@ -6,119 +7,6 @@ UAG_RigidbodyComponent::UAG_RigidbodyComponent()
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = true;
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
-}
-
-void UAG_RigidbodyComponent::TickComponent(
-	float DeltaTime,
-	enum ELevelTick TickType,
-	FActorComponentTickFunction* ThisTickFunction
-)
-{
-	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-
-	TimeAccumulator += DeltaTime;
-
-	constexpr int32 MaxSubSteps = 100;
-	int32 NumSteps = 0;
-
-	while (TimeAccumulator >= FixedTimeStep && NumSteps < MaxSubSteps)
-	{
-		FixedUpdate(FixedTimeStep);
-		TimeAccumulator -= FixedTimeStep;
-		++NumSteps;
-	}
-	if (NumSteps == MaxSubSteps)
-	{
-		// Prevent spiral of death
-		TimeAccumulator = 0.0f;
-	}
-}
-
-
-void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
-{
-	if (bEnableCollision && NewUpdatedComponent)
-	{
-		NewUpdatedComponent->SetSimulatePhysics(false);
-		NewUpdatedComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-		UpdatedComponent = NewUpdatedComponent;
-	}
-}
-
-void UAG_RigidbodyComponent::SetGravityDirection(
-	const FVector& NewGravityDirection,
-	float NewGravityStrength,
-	bool bNormalize,
-	bool bWakeUp
-)
-{
-	// Reject zero input direction
-	if (NewGravityDirection.IsNearlyZero())
-	{
-		return;
-	}
-
-	// Set direction (optionally normalized)
-	if (bNormalize)
-	{
-		GravityDirection = NewGravityDirection.GetSafeNormal();
-	}
-	else
-	{
-		GravityDirection = NewGravityDirection;
-	}
-
-	// Optionally update gravity strength
-	if (NewGravityStrength > 0.0f)
-	{
-		GravityStrength = NewGravityStrength;
-	}
-
-	// Optionally wake the body
-	if (bWakeUp)
-	{
-		WakeUp();
-	}
-}
-
-void UAG_RigidbodyComponent::AdjustGravityFromContactNormal(bool bNormalize, bool bWakeUp)
-{
-	if (!bHasLastGroundNormal)
-	{
-		return;
-	}
-
-	// Gravity should point "down", opposite the ground normal
-	const FVector NewGravityDir = -LastGroundNormal;
-
-	// Reuse the existing helper (keeps strength, optional wakeup and normalization)
-	SetGravityDirection(NewGravityDir, GravityStrength, bNormalize, bWakeUp);
-}
-
-void UAG_RigidbodyComponent::AddForce(const FVector& Force)
-{
-	if (!Force.IsNearlyZero())
-	{
-		WakeUp();
-	}
-
-	AccumulatedForces += Force;
-}
-
-void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
-{
-	if (!Torque.IsNearlyZero())
-	{
-		WakeUp();
-	}
-
-	AccumulatedTorque += Torque;
-}
-
-void UAG_RigidbodyComponent::WakeUp()
-{
-	bSleeping    = false;
-	FramesAtRest = 0;
 }
 
 void UAG_RigidbodyComponent::BeginPlay()
@@ -160,22 +48,11 @@ void UAG_RigidbodyComponent::BeginPlay()
 			{
 				UpdatedComponent = Owner->FindComponentByClass<UPrimitiveComponent>();
 			}
-
-			if (!UpdatedComponent)
-			{
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					5.0f,
-					FColor::Red,
-					TEXT(
-						"UAG_RigidbodyComponent: No UpdatedComponent assigned and Owner has no UPrimitiveComponent root!")
-				);
-			}
 		}
 	}
 	if (UpdatedComponent)
 	{
-		CachedRadius = UpdatedComponent->Bounds.SphereRadius;
+		SetUpdatedComponent(UpdatedComponent);
 	}
 
 	if (InertiaScalar <= 0.0f && UpdatedComponent)
@@ -183,13 +60,130 @@ void UAG_RigidbodyComponent::BeginPlay()
 		const float Radius = UpdatedComponent->Bounds.SphereRadius; // good enough
 		InertiaScalar = 0.4f * Mass * Radius * Radius; // solid sphere approx
 	}
+}
 
-	// Make sure physics is not being simulated by Chaos on this component
-	if (UpdatedComponent && bEnableCollision)
+
+void UAG_RigidbodyComponent::TickComponent(
+	float DeltaTime,
+	enum ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction
+)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	TimeAccumulator += DeltaTime;
+
+	constexpr int32 MaxSubSteps = 100;
+	int32 NumSteps = 0;
+
+	while (TimeAccumulator >= FixedTimeStep && NumSteps < MaxSubSteps)
 	{
-		UpdatedComponent->SetSimulatePhysics(false);
-		UpdatedComponent->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		FixedUpdate(FixedTimeStep);
+		TimeAccumulator -= FixedTimeStep;
+		++NumSteps;
 	}
+	if (NumSteps == MaxSubSteps)
+	{
+		// Prevent spiral of death
+		TimeAccumulator = 0.0f;
+	}
+}
+
+void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
+{
+	if (!NewUpdatedComponent)
+	{
+		return;
+	}
+
+	NewUpdatedComponent->SetSimulatePhysics(false);
+	NewUpdatedComponent->SetCollisionEnabled(bEnableCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	UpdatedComponent = NewUpdatedComponent;
+	CachedRadius = UpdatedComponent->Bounds.SphereRadius;
+}
+
+void UAG_RigidbodyComponent::SetGravityDirection(
+	const FVector& NewGravityDirection,
+	float NewGravityStrength,
+	bool bWakeUp
+)
+{
+	// Reject zero input direction
+	if (NewGravityDirection.IsNearlyZero())
+	{
+		return;
+	}
+
+	GravityDirection = NewGravityDirection.GetSafeNormal();
+	
+	// Optionally update gravity strength
+	if (NewGravityStrength > 0.0f)
+	{
+		GravityStrength = NewGravityStrength;
+	}
+
+	// Optionally wake the body
+	if (bWakeUp)
+	{
+		WakeUp();
+	}
+}
+
+void UAG_RigidbodyComponent::SetRotationEnabled(bool bEnable, bool bClearSpin)
+{
+	bEnableRotation = bEnable;
+
+	if (bClearSpin && (!AngularVelocity.IsNearlyZero() || !AccumulatedTorque.IsNearlyZero()))
+	{
+		ClearSpin();
+	}
+}
+
+void UAG_RigidbodyComponent::ClearSpin()
+{
+	AngularVelocity = FVector::ZeroVector;
+	AccumulatedTorque = FVector::ZeroVector;
+	WakeUp();
+}
+
+void UAG_RigidbodyComponent::AdjustGravityFromContactNormal(bool bWakeUp)
+{
+	if (!bHasLastGroundNormal)
+	{
+		return;
+	}
+
+	// Gravity should point "down", opposite the ground normal
+	const FVector NewGravityDir = -LastGroundNormal;
+
+	// Reuse the existing helper (keeps strength, optional wakeup and normalization)
+	SetGravityDirection(NewGravityDir, GravityStrength, bWakeUp);
+}
+
+void UAG_RigidbodyComponent::AddForce(const FVector& Force)
+{
+	if (!Force.IsNearlyZero())
+	{
+		WakeUp();
+	}
+
+	AccumulatedForces += Force;
+}
+
+void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
+{
+	if (!Torque.IsNearlyZero())
+	{
+		WakeUp();
+	}
+
+	AccumulatedTorque += Torque;
+}
+
+void UAG_RigidbodyComponent::WakeUp()
+{
+	bSleeping    = false;
+	FramesAtRest = 0;
 }
 
 
@@ -207,12 +201,16 @@ void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 	}
 
 	bIsGrounded = false;
+	bHadStaticContactThisStep = false;
 
 	IntegrateForces();
 	IntegrateVelocity(FixedDeltaTime);
 	IntegrateAngularVelocity(FixedDeltaTime);
+	IntegrateAngularDrag(FixedDeltaTime);
 
 	DoMovementAndCollisions(FixedDeltaTime);
+	SolveGroundContactFriction(FixedDeltaTime);
+	
 	ApplyRotation(FixedDeltaTime);
 
 	UpdateSleepState();
@@ -226,7 +224,6 @@ void UAG_RigidbodyComponent::IntegrateForces()
 {
 	ApplyGravity();
 	ApplyDragForce();
-	ApplyAngularDrag();
 }
 
 void UAG_RigidbodyComponent::IntegrateVelocity(float FixedDeltaTime)
@@ -274,13 +271,7 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 
 		if (Delta.IsNearlyZero())
 		{
-			if (Iteration > 0)
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					1.0f,
-					FColor::Green,
-					FString::Printf(TEXT("Delta near zero, exit at Rigidbody Iterations: %d"), Iteration)
-				);
+			
 			break;
 		}
 
@@ -292,13 +283,6 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 
 		if (!bEnableCollision || !Hit.bBlockingHit)
 		{
-			if (Iteration > 0)
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					1.0f,
-					FColor::Green,
-					FString::Printf(TEXT("No blocking hit, exit at Rigidbody Iterations: %d"), Iteration)
-				);
 			// Moved freely, no more contacts this step
 			break;
 		}
@@ -315,13 +299,6 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 		// If no time left in this step, we are done
 		if (RemainingTime <= KINDA_SMALL_NUMBER)
 		{
-			if (Iteration > 0)
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					1.0f,
-					FColor::Green,
-					FString::Printf(TEXT("No remaining time, exit at Rigidbody Iterations: %d"), Iteration)
-				);
 			break;
 		}
 
@@ -333,13 +310,6 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 
 		if (SlideDelta.IsNearlyZero())
 		{
-			if (Iteration > 0)
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					1.0f,
-					FColor::Green,
-					FString::Printf(TEXT("Slide delta near zero, exit at Rigidbody Iterations: %d"), Iteration)
-				);
 			// No slide movement, done for this step
 			break;
 		}
@@ -349,13 +319,6 @@ void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
 
 		if (!bEnableCollision || !SlideHit.bBlockingHit)
 		{
-			if (Iteration > 0)
-				GEngine->AddOnScreenDebugMessage(
-					-1,
-					1.0f,
-					FColor::Green,
-					FString::Printf(TEXT("Slide no blocking hit, exit at Rigidbody Iterations: %d"), Iteration)
-				);
 			// Slid freely, done for this step
 			break;
 		}
@@ -397,22 +360,16 @@ void UAG_RigidbodyComponent::ApplyDragForce()
 	AccumulatedForces += DragForce;
 }
 
-void UAG_RigidbodyComponent::ApplyAngularDrag()
+void UAG_RigidbodyComponent::IntegrateAngularDrag(float FixedDeltaTime)
 {
-	if (!bEnableRotation || AngularDragCoeff <= 0.0f)
+	if (!bEnableRotation || AngularDragCoeff <= 0.0f || InertiaScalar <= SMALL_NUMBER)
 	{
 		return;
 	}
 
-	const float Omega = AngularVelocity.Size();
-	if (Omega < KINDA_SMALL_NUMBER)
-	{
-		return;
-	}
-
-	// Very simple linear angular drag: τ = -c * ω
-	const FVector DragTorque = -AngularDragCoeff * AngularVelocity;
-	AccumulatedTorque += DragTorque;
+	// ω_{n+1} = ω_n / (1 + (c/I) dt)
+	const float Denom = 1.0f + (AngularDragCoeff / InertiaScalar) * FixedDeltaTime;
+	AngularVelocity /= Denom;
 }
 
 void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime)
@@ -421,63 +378,14 @@ void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float Fixe
 	{
 		return;
 	}
-	
-	// Try body–body resolution first
-	if (AActor* OtherActor = Hit.GetActor())
-	{
-		if (UAG_RigidbodyComponent* OtherBody =
-			OtherActor->FindComponentByClass<UAG_RigidbodyComponent>())
-		{
-			// Avoid self and double-solving
-			if (OtherBody != this)
-			{
-				OtherBody->WakeUp();
-				
-				HandleBodyBodyContact(OtherBody, Hit, FixedDeltaTime);
-			}
-			// Whether we solved or not, don't also treat it as static geometry
-			return;
-		}
-	}
 
-	FAGContactData Contact;
-	if (!BuildContactData(Hit, Contact))
+	if (TrySolveBodyBody(Hit, FixedDeltaTime))
 	{
 		return;
 	}
 
-	// Grounded classification
-	float UpDot = FVector::DotProduct(-GravityDirection, Contact.Normal);
-	bIsGrounded = (UpDot >= GroundNormalCosThreshold);
-	
-	if (bIsGrounded)
-	{
-		bHasLastGroundNormal = true;
-		LastGroundNormal = Contact.Normal;
-		if (bAdjustGravityToGround)
-		{
-			AdjustGravityFromContactNormal(true, false);
-			UpDot = FVector::DotProduct(-GravityDirection, Contact.Normal);
-			bIsGrounded = (UpDot >= GroundNormalCosThreshold);
-		}
-	}
-
-	// Threshold for "real" impact into the surface
-	const float NormalImpactThreshold = 1.0f; // cm/s, tune if needed
-
-	// If we're significantly moving into the surface -> do a full normal impulse
-	if (Contact.VRelN < -NormalImpactThreshold)
-	{
-		ApplyNormalImpulse(Contact);
-	}
-
-	// Always try friction when we have tangential slip (impact or resting contact)
-	ApplyFrictionImpulse(Contact, FixedDeltaTime, UpDot);
-
-	// Small normal clamp to kill jitter
-	ClampContactNormalRestVelocity(Contact);
+	SolveStaticContact(Hit, FixedDeltaTime);
 }
-
 
 void UAG_RigidbodyComponent::UpdateSleepState()
 {
@@ -487,7 +395,7 @@ void UAG_RigidbodyComponent::UpdateSleepState()
 	}
 
 	const float LinearSpeedSq = Velocity.SizeSquared();
-	const float AngularSpeedSq = AngularVelocity.SizeSquared();
+	const float AngularSpeedSq = GetContactAngularVelocity().SizeSquared();
 
 	const float SleepLinearSpeedSq = SleepLinearSpeedThreshold * SleepLinearSpeedThreshold;
 	const float SleepAngularSpeedSq = SleepAngularSpeedThreshold * SleepAngularSpeedThreshold;
@@ -514,10 +422,151 @@ void UAG_RigidbodyComponent::UpdateSleepState()
 }
 
 
-void UAG_RigidbodyComponent::ApplyRotation(float FixedDeltaTime)
+void UAG_RigidbodyComponent::SolveGroundContactFriction(float FixedDeltaTime)
+{
+	// Only matters if we want contact friction
+	if ((DynamicFrictionCoeff <= 0.0f && StaticFrictionCoeff <= 0.0f) || Mass <= SMALL_NUMBER)
+	{
+		return;
+	}
+	
+	if (bHadStaticContactThisStep)
+	{
+		return;
+	}
+
+	FHitResult GroundHit;
+	if (!TryGetGroundHit(GroundHit) || !GroundHit.bBlockingHit)
+	{
+		return;
+	}
+
+	FAGContactData Contact;
+	if (!BuildContactData(GroundHit, Contact))
+	{
+		return;
+	}
+
+	const float UpDot = UpdateGroundStateFromNormal(Contact.Normal);
+	if (!bIsGrounded)
+	{
+		return;
+	}
+
+	// IMPORTANT: this is the “resting contact” path:
+	// Contact.NormalImpulse will be 0 here, so ApplyFrictionImpulse will fall back to m*g*dt*UpDot.
+	ApplyFrictionImpulse(Contact, FixedDeltaTime, UpDot);
+	ApplyTorsionalFrictionImpulse(Contact, FixedDeltaTime, UpDot);
+	ClampContactNormalRestVelocity(Contact);
+}
+
+float UAG_RigidbodyComponent::UpdateGroundStateFromNormal(const FVector& ContactNormal)
+{
+	const float UpDot = FVector::DotProduct(-GravityDirection, ContactNormal);
+	bIsGrounded = (UpDot >= GroundNormalCosThreshold);
+
+	if (bIsGrounded)
+	{
+		bHasLastGroundNormal = true;
+		LastGroundNormal = ContactNormal;
+
+		if (bAdjustGravityToGround)
+		{
+			AdjustGravityFromContactNormal(false);
+			// Recompute after changing gravity
+			const float NewUpDot = FVector::DotProduct(-GravityDirection, ContactNormal);
+			bIsGrounded = (NewUpDot >= GroundNormalCosThreshold);
+			return NewUpDot;
+		}
+	}
+
+	return UpDot;
+}
+
+bool UAG_RigidbodyComponent::TryGetGroundHit(FHitResult& OutHit) const
+{
+	if (!UpdatedComponent)
+	{
+		return false;
+	}
+
+	const float ProbeDistance = FMath::Max(2.0f, CachedRadius * 0.1f);
+
+	const FVector Start = UpdatedComponent->GetComponentLocation();
+	const FVector End   = Start + GravityDirection * ProbeDistance;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(AG_GroundProbe), false, GetOwner());
+	return GetWorld()->LineTraceSingleByChannel(OutHit, Start, End, GroundProbeChannel, Params);
+}
+
+float UAG_RigidbodyComponent::ComputeTorsionalRadius(const FVector& /*ContactNormal*/) const
+{
+	//TODO: Replace/extend this for boxes/capsules without touching the solver.
+	return CachedRadius * TorsionalRadiusScale;
+}
+
+void UAG_RigidbodyComponent::ApplyTorsionalFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot)
+{
+	if (!bEnableRotation || InertiaScalar <= SMALL_NUMBER)
+	{
+		return;
+	}
+	if (TorsionalFrictionCoeff <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector N = Contact.Normal;
+
+	// Spin about the contact normal
+	const float OmegaN = FVector::DotProduct(AngularVelocity, N);
+	if (FMath::Abs(OmegaN) <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Use the same "effective normal impulse" idea you already use for friction caps.
+	float EffectiveNormalImpulse = Contact.NormalImpulse;
+
+	// Resting/grounded contact fallback: m*g*UpDot*dt
+	if (EffectiveNormalImpulse <= SMALL_NUMBER && bIsGrounded && UpDot > 0.0f)
+	{
+		EffectiveNormalImpulse = Mass * GravityStrength * UpDot * FixedDeltaTime;
+	}
+
+	if (EffectiveNormalImpulse <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float rEff = ComputeTorsionalRadius(N);
+	if (rEff <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Coulomb-like twist cap:
+	// tau_max = mu_twist * N_force * r
+	// Jw_max  = tau_max * dt = mu_twist * (N_force*dt) * r = mu_twist * NormalImpulse * r
+	const float JwMax = TorsionalFrictionCoeff * EffectiveNormalImpulse * rEff;
+
+	// Angular impulse needed to kill OmegaN in one step (scalar inertia simplification)
+	float Jw = -OmegaN * InertiaScalar;
+	Jw = FMath::Clamp(Jw, -JwMax, JwMax);
+
+	if (FMath::IsNearlyZero(Jw))
+	{
+		return;
+	}
+
+	AngularVelocity += (Jw / InertiaScalar) * N;
+}
+
+
+void UAG_RigidbodyComponent::ApplyRotation(float FixedDeltaTime) const
 {
 	if (!bEnableRotation || !UpdatedComponent)
-	{
+	{		
 		return;
 	}
 
@@ -568,7 +617,7 @@ bool UAG_RigidbodyComponent::BuildContactData(
 	}
 
 	// Contact velocity: v_c = v + ω × r
-	const FVector VContact = Velocity + FVector::CrossProduct(AngularVelocity, R);
+	const FVector VContact = Velocity + FVector::CrossProduct(GetContactAngularVelocity(), R);
 
 	const float VRelN = FVector::DotProduct(VContact, Normal);
 
@@ -642,37 +691,34 @@ void UAG_RigidbodyComponent::ApplyNormalImpulse(FAGContactData& Contact)
 
 void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot)
 {
-	if (DynamicFrictionCoeff <= 0.0f)
+	// Need at least some friction
+	if (DynamicFrictionCoeff <= 0.0f && StaticFrictionCoeff <= 0.0f)
 	{
 		return;
 	}
 
-	// --------------------------------------------------------------------
-	// 1) Decide what "normal impulse" we use as the Coulomb cap
-	// --------------------------------------------------------------------
-
-	// Case A: impact frame – we already computed a real normal impulse
+	// ------------------------------------------------------------
+	// 1) Effective normal impulse (Coulomb cap basis)
+	// ------------------------------------------------------------
 	float EffectiveNormalImpulse = Contact.NormalImpulse;
 
-	// Case B: no impact impulse (resting / sliding contact), but we're grounded.
-	// Approximate normal impulse for this step as m * g * dt * UpDot.
+	// Resting contact support estimate: N ≈ m*g*UpDot
 	if (EffectiveNormalImpulse <= SMALL_NUMBER && bIsGrounded && UpDot > 0.0f)
 	{
-		const float NormalForce = Mass * GravityStrength * UpDot; // ~ N
-		EffectiveNormalImpulse = NormalForce * FixedDeltaTime; // N·s (impulse)
+		const float NormalForce = Mass * GravityStrength * UpDot;
+		EffectiveNormalImpulse = NormalForce * FixedDeltaTime;
 	}
 
 	if (EffectiveNormalImpulse <= SMALL_NUMBER)
 	{
-		// No meaningful normal support -> no friction (Coulomb model)
 		return;
 	}
 
-	// --------------------------------------------------------------------
-	// 2) Compute tangential relative velocity at the contact
-	// --------------------------------------------------------------------
-	const FVector VContact =
-		Velocity + FVector::CrossProduct(AngularVelocity, Contact.R);
+	// ------------------------------------------------------------
+	// 2) Tangential velocity at contact
+	// ------------------------------------------------------------
+	const FVector Omega = GetContactAngularVelocity();
+	const FVector VContact = Velocity + FVector::CrossProduct(Omega, Contact.R);
 
 	const float vRelN = FVector::DotProduct(VContact, Contact.Normal);
 	const FVector vT = VContact - vRelN * Contact.Normal;
@@ -680,13 +726,14 @@ void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact, float
 
 	if (vTLen <= KINDA_SMALL_NUMBER)
 	{
-		// No slip -> no dynamic friction
-		return;
+		return; // no slip to correct
 	}
 
 	const FVector TangentDir = vT / vTLen;
 
-	// Effective inverse mass along tangent
+	// ------------------------------------------------------------
+	// 3) Effective mass along tangent
+	// ------------------------------------------------------------
 	const FVector rCrossT = FVector::CrossProduct(Contact.R, TangentDir);
 	const float rCrossTLenSq = rCrossT.SizeSquared();
 
@@ -701,16 +748,33 @@ void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact, float
 		return;
 	}
 
-	// --------------------------------------------------------------------
-	// 3) Impulse that tries to kill tangential velocity, but Coulomb-clamped
-	// --------------------------------------------------------------------
+	// ------------------------------------------------------------
+	// 4) Static friction first, then dynamic
+	// ------------------------------------------------------------
+	// Impulse needed to cancel tangential velocity this step:
+	// want vT' = 0 => jT_needed = -vTLen / invEffMassT
+	const float jTNeeded = -vTLen / invEffMassT;
+	const float jTNeededAbs = FMath::Abs(jTNeeded);
 
-	// j_t that would zero v_t
-	float jT = -vTLen / invEffMassT;
+	const float maxStatic = StaticFrictionCoeff * EffectiveNormalImpulse;
+	const float maxDynamic = DynamicFrictionCoeff * EffectiveNormalImpulse;
 
-	// Coulomb limit: |j_t| ≤ μ * EffectiveNormalImpulse
-	const float maxFrictionImpulse = DynamicFrictionCoeff * EffectiveNormalImpulse;
-	jT = FMath::Clamp(jT, -maxFrictionImpulse, maxFrictionImpulse);
+	float jT;
+
+	// If static can fully cancel slip, do it (no slip)
+	if (StaticFrictionCoeff > 0.0f && jTNeededAbs <= maxStatic)
+	{
+		jT = jTNeeded;
+	}
+	else
+	{
+		// Otherwise dynamic friction clamp (slip)
+		if (DynamicFrictionCoeff <= 0.0f)
+		{
+			return;
+		}
+		jT = FMath::Clamp(jTNeeded, -maxDynamic, maxDynamic);
+	}
 
 	if (FMath::IsNearlyZero(jT))
 	{
@@ -719,23 +783,21 @@ void UAG_RigidbodyComponent::ApplyFrictionImpulse(FAGContactData& Contact, float
 
 	const FVector ImpulseT = jT * TangentDir;
 
-	// Apply linear
+	// Linear
 	Velocity += ImpulseT / Mass;
 
-	// Apply angular
+	// Angular (only if rotation enabled)
 	if (bEnableRotation && InertiaScalar > 0.0f)
 	{
-		const FVector dOmegaT = FVector::CrossProduct(Contact.R, ImpulseT) / InertiaScalar;
-		AngularVelocity += dOmegaT;
+		AngularVelocity += FVector::CrossProduct(Contact.R, ImpulseT) / InertiaScalar;
 	}
 }
-
 
 void UAG_RigidbodyComponent::ClampContactNormalRestVelocity(FAGContactData& Contact)
 {
 	// Recompute contact velocity with both impulses applied
 	const FVector VContactFinal =
-		Velocity + FVector::CrossProduct(AngularVelocity, Contact.R);
+		Velocity + FVector::CrossProduct(GetContactAngularVelocity(), Contact.R);
 
 	const float vRelN_final = FVector::DotProduct(VContactFinal, Contact.Normal);
 
@@ -747,27 +809,66 @@ void UAG_RigidbodyComponent::ClampContactNormalRestVelocity(FAGContactData& Cont
 	}
 }
 
+bool UAG_RigidbodyComponent::TrySolveBodyBody(const FHitResult& Hit, float FixedDeltaTime)
+{
+	AActor* OtherActor = Hit.GetActor();
+	if (!OtherActor)
+	{
+		return false;
+	}
+
+	UAG_RigidbodyComponent* OtherBody = OtherActor->FindComponentByClass<UAG_RigidbodyComponent>();
+	if (!OtherBody || OtherBody == this)
+	{
+		return false;
+	}
+
+	OtherBody->WakeUp();
+	HandleBodyBodyContact(OtherBody, Hit, FixedDeltaTime);
+	return true;
+}
+
+void UAG_RigidbodyComponent::SolveStaticContact(const FHitResult& Hit, float FixedDeltaTime)
+{
+	FAGContactData Contact;
+	if (!BuildContactData(Hit, Contact))
+	{
+		return;
+	}
+	
+	const float UpDot = UpdateGroundStateFromNormal(Contact.Normal);
+
+	// Only treat as "static support contact" if it's ground-ish
+	if (UpDot >= GroundNormalCosThreshold)
+	{
+		bHadStaticContactThisStep = true;
+	}
+
+	const float NormalImpactThreshold = 1.0f;
+	if (Contact.VRelN < -NormalImpactThreshold)
+	{
+		ApplyNormalImpulse(Contact);
+	}
+
+	ApplyFrictionImpulse(Contact, FixedDeltaTime, UpDot);
+	ApplyTorsionalFrictionImpulse(Contact, FixedDeltaTime, UpDot);
+	ClampContactNormalRestVelocity(Contact);
+}
+
 void UAG_RigidbodyComponent::HandleBodyBodyContact(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit,
-	float FixedDeltaTime)
+                                                   float FixedDeltaTime)
 {
 	FAGTwoBodyContactData Contact;
 	if (!BuildBodyBodyContactData(OtherBody, Hit, Contact))
 	{
 		return;
 	}
+	
+	const float Jn = ApplyTwoBodyNormalImpulse(OtherBody, Contact);
+	const float JnAbs = FMath::Abs(Jn);
 
-	// Threshold for "real" impact into the surface
-	// const float NormalImpactThreshold = 0.0f; // cm/s
-	// if (Contact.VRelN >= -NormalImpactThreshold)
-	// {
-	// 	// Not approaching strongly enough along the normal
-	// 	return;
-	// }
-
-	ApplyTwoBodyNormalImpulse(OtherBody, Contact);
-
-	// NOTE: body–body friction can be added later here using Contact.VRel
-	// and a tangential impulse similar to ApplyFrictionImpulse.
+	ApplyTwoBodyFrictionImpulse(OtherBody, Contact, JnAbs);
+	ApplyTwoBodyTorsionalFrictionImpulse(OtherBody, Contact, JnAbs);
 }
 
 bool UAG_RigidbodyComponent::BuildBodyBodyContactData(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, FAGTwoBodyContactData&  OutData) const
@@ -795,12 +896,22 @@ bool UAG_RigidbodyComponent::BuildBodyBodyContactData(UAG_RigidbodyComponent* Ot
 	const FVector X1 = UpdatedComponent->GetComponentLocation();
 	const FVector X2 = OtherBody->UpdatedComponent->GetComponentLocation();
 
-	const FVector R1 = ContactPoint - X1;
-	const FVector R2 = ContactPoint - X2;
+	FVector R1 = ContactPoint - X1;
+	FVector R2 = ContactPoint - X2;
+	
+	
+	if (bAssumeSphere && CachedRadius > SMALL_NUMBER)
+	{
+		R1 = -Normal * CachedRadius;
+	}
+	if (OtherBody->bAssumeSphere && OtherBody->CachedRadius > SMALL_NUMBER)
+	{
+		R2 =  Normal * OtherBody->CachedRadius;
+	}
 
 	// Velocities at the contact point
-	const FVector V1c = Velocity + FVector::CrossProduct(AngularVelocity, R1);
-	const FVector V2c = OtherBody->Velocity + FVector::CrossProduct(OtherBody->AngularVelocity, R2);
+	const FVector V1c = Velocity + FVector::CrossProduct(GetContactAngularVelocity(), R1);
+	const FVector V2c = OtherBody->Velocity + FVector::CrossProduct(OtherBody->GetContactAngularVelocity(), R2);
 
 	const FVector VRel  = V1c - V2c;
 	const float   VRelN = FVector::DotProduct(VRel, Normal);
@@ -815,16 +926,17 @@ bool UAG_RigidbodyComponent::BuildBodyBodyContactData(UAG_RigidbodyComponent* Ot
 	return true;
 }
 
-void UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* OtherBody, FAGTwoBodyContactData&  Contact)
+
+float UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* OtherBody, FAGTwoBodyContactData&  Contact)
 {
 	if (!OtherBody)
 	{
-		return;
+		return 0.0f;
 	}
 
 	if (Mass <= SMALL_NUMBER || OtherBody->Mass <= SMALL_NUMBER)
 	{
-		return; // treat massless as static / ignore for now
+		return 0.0f; // treat massless as static / ignore for now
 	}
 
 	const FVector N = Contact.Normal;
@@ -838,7 +950,7 @@ void UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* O
 	
 	if (VRelN >= 0.0f)
 	{
-		return;
+		return 0.0f; // bodies separating or stationary along normal
 	}
 
 	// Effective inverse mass along normal:
@@ -859,7 +971,7 @@ void UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* O
 
 	if (InvEffMassN <= SMALL_NUMBER)
 	{
-		return;
+		return 0.0f;
 	}
 
 	// Desired post-impact normal relative velocity
@@ -867,16 +979,7 @@ void UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* O
 	const float DeltaRelN   = DesiredRelN - VRelN; // = -(1+E) * VRelN
 
 	float Jn = DeltaRelN / InvEffMassN;
-	
-	// // Only allow impulse that pushes bodies apart
-	// if (Jn < 0.0f)
-	// {
-	// 	Jn = 0.0f;
-	// }
-	// if (Jn == 0.0f)
-	// {
-	// 	return;
-	// }
+	if (Jn < 0.0f) { Jn = 0.0f; }
 
 	const FVector ImpulseN = Jn * N;
 
@@ -894,5 +997,199 @@ void UAG_RigidbodyComponent::ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* O
 		const FVector OppImpulseN = -ImpulseN;
 		OtherBody->AngularVelocity += FVector::CrossProduct(Contact.R2, OppImpulseN) / OtherBody->InertiaScalar;
 	}
+	
+	return Jn;
 }
+
+void UAG_RigidbodyComponent::ApplyTwoBodyFrictionImpulse(
+	UAG_RigidbodyComponent* OtherBody,
+	const FAGTwoBodyContactData& Contact,
+	float NormalImpulseMagnitude
+)
+{
+	if (!OtherBody)
+	{
+		return;
+	}
+
+	// No normal support -> no Coulomb friction cap
+	if (NormalImpulseMagnitude <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Combine coefficients (simple, stable default)
+	const float MuStatic  = 0.5f * (StaticFrictionCoeff  + OtherBody->StaticFrictionCoeff);
+	const float MuDynamic = 0.5f * (DynamicFrictionCoeff + OtherBody->DynamicFrictionCoeff);
+
+	if (MuStatic <= 0.0f && MuDynamic <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector N = Contact.Normal;
+
+	// Relative velocity at contact (already computed in BuildBodyBodyContactData)
+	const FVector VRel = Contact.VRel;
+
+	// Tangential relative velocity
+	const float VRelN = FVector::DotProduct(VRel, N);
+	const FVector VT = VRel - VRelN * N;
+	const float VTLen = VT.Size();
+
+	if (VTLen <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector T = VT / VTLen;
+
+	// Effective inverse mass along tangent for two bodies:
+	// 1/m1 + 1/m2 + |r1×t|^2/I1 + |r2×t|^2/I2
+	float InvEffMassT = 1.0f / Mass + 1.0f / OtherBody->Mass;
+
+	if (bEnableRotation && InertiaScalar > SMALL_NUMBER)
+	{
+		InvEffMassT += FVector::CrossProduct(Contact.R1, T).SizeSquared() / InertiaScalar;
+	}
+	if (OtherBody->bEnableRotation && OtherBody->InertiaScalar > SMALL_NUMBER)
+	{
+		InvEffMassT += FVector::CrossProduct(Contact.R2, T).SizeSquared() / OtherBody->InertiaScalar;
+	}
+
+	if (InvEffMassT <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Impulse needed to kill VT in one shot
+	const float JTNeeded = -VTLen / InvEffMassT;
+	const float JTNeededAbs = FMath::Abs(JTNeeded);
+
+	const float MaxStatic  = MuStatic  * NormalImpulseMagnitude;
+	const float MaxDynamic = MuDynamic * NormalImpulseMagnitude;
+
+	float JT = 0.0f;
+
+	// Static if it can fully cancel slip, otherwise dynamic
+	if (MuStatic > 0.0f && JTNeededAbs <= MaxStatic)
+	{
+		JT = JTNeeded;
+	}
+	else
+	{
+		if (MuDynamic <= 0.0f)
+		{
+			return;
+		}
+		JT = FMath::Clamp(JTNeeded, -MaxDynamic, MaxDynamic);
+	}
+
+	if (FMath::IsNearlyZero(JT))
+	{
+		return;
+	}
+
+	const FVector ImpulseT = JT * T;
+
+	// Apply linear impulses (equal and opposite)
+	Velocity += ImpulseT / Mass;
+	OtherBody->Velocity -= ImpulseT / OtherBody->Mass;
+
+	// Apply angular impulses
+	if (bEnableRotation && InertiaScalar > SMALL_NUMBER)
+	{
+		AngularVelocity += FVector::CrossProduct(Contact.R1, ImpulseT) / InertiaScalar;
+	}
+	if (OtherBody->bEnableRotation && OtherBody->InertiaScalar > SMALL_NUMBER)
+	{
+		OtherBody->AngularVelocity -= FVector::CrossProduct(Contact.R2, ImpulseT) / OtherBody->InertiaScalar;
+	}
+}
+
+
+void UAG_RigidbodyComponent::ApplyTwoBodyTorsionalFrictionImpulse(
+	UAG_RigidbodyComponent* OtherBody,
+	const FAGTwoBodyContactData& Contact,
+	float NormalImpulseMagnitude
+)
+{
+	if (!OtherBody)
+	{
+		return;
+	}
+	if (NormalImpulseMagnitude <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Need at least one rotating body to matter
+	const bool bThisRot  = bEnableRotation && InertiaScalar > SMALL_NUMBER;
+	const bool bOtherRot = OtherBody->bEnableRotation && OtherBody->InertiaScalar > SMALL_NUMBER;
+	if (!bThisRot && !bOtherRot)
+	{
+		return;
+	}
+
+	// Combine torsional coeff
+	const float MuTwist = 0.5f * (TorsionalFrictionCoeff + OtherBody->TorsionalFrictionCoeff);
+	if (MuTwist <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector N = Contact.Normal;
+
+	const float Omega1N = bThisRot  ? FVector::DotProduct(AngularVelocity, N) : 0.0f;
+	const float Omega2N = bOtherRot ? FVector::DotProduct(OtherBody->AngularVelocity, N) : 0.0f;
+
+	const float OmegaRelN = Omega1N - Omega2N; // relative twist rate about N
+	if (FMath::Abs(OmegaRelN) <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Effective torsional radius: average of each body's notion (sphere now, extensible later)
+	const float R1 = ComputeTorsionalRadius(N);
+	const float R2 = OtherBody->ComputeTorsionalRadius(-N);
+	const float REff = 0.5f * (R1 + R2);
+
+	if (REff <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// Cap angular impulse (Coulomb-like): Jw_max = mu_twist * Jn * r
+	const float JwMax = MuTwist * NormalImpulseMagnitude * REff;
+
+	// Relative change in OmegaRelN from an angular impulse Jw along N:
+	// Omega1 += Jw/I1, Omega2 -= Jw/I2  -> OmegaRel += Jw*(1/I1 + 1/I2)
+	float InvEffInertia = 0.0f;
+	if (bThisRot)  { InvEffInertia += 1.0f / InertiaScalar; }
+	if (bOtherRot) { InvEffInertia += 1.0f / OtherBody->InertiaScalar; }
+
+	if (InvEffInertia <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	float JwNeeded = -OmegaRelN / InvEffInertia;
+	float Jw = FMath::Clamp(JwNeeded, -JwMax, JwMax);
+
+	if (FMath::IsNearlyZero(Jw))
+	{
+		return;
+	}
+
+	// Apply equal/opposite angular impulse along N
+	if (bThisRot)
+	{
+		AngularVelocity += (Jw / InertiaScalar) * N;
+	}
+	if (bOtherRot)
+	{
+		OtherBody->AngularVelocity -= (Jw / OtherBody->InertiaScalar) * N;
+	}
+}
+
 
