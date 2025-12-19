@@ -11,23 +11,29 @@ struct FAGContactData
 {
 	GENERATED_BODY()
 
-	UPROPERTY(VisibleAnywhere)
-	FVector Normal = FVector::ZeroVector;          // unit
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	FVector ContactPoint = FVector::ZeroVector;    // world
+	FVector Normal = FVector::ZeroVector; // unit
 
-	UPROPERTY(VisibleAnywhere)
-	FVector R = FVector::ZeroVector;               // ContactPoint - COM
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	FVector VContact = FVector::ZeroVector;        // v + ω × r
+	FVector ContactPoint = FVector::ZeroVector; // world
 
-	UPROPERTY(VisibleAnywhere)
-	float VRelN = 0.0f;                            // VContact · Normal
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	float NormalImpulse = 0.0f;                    // cached for Coulomb cap
+	FVector R = FVector::ZeroVector; // ContactPoint - COM
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	FVector VContact = FVector::ZeroVector; // v + ω × r
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	float VRelN = 0.0f; // VContact · Normal
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	float NormalImpulse = 0.0f; // cached for Coulomb cap
 };
 
 USTRUCT(BlueprintType)
@@ -35,23 +41,29 @@ struct FAGTwoBodyContactData
 {
 	GENERATED_BODY()
 
-	UPROPERTY(VisibleAnywhere)
-	FVector Normal = FVector::ZeroVector;          // unit
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	FVector ContactPoint = FVector::ZeroVector;    // world
+	FVector Normal = FVector::ZeroVector; // unit
 
-	UPROPERTY(VisibleAnywhere)
-	FVector R1 = FVector::ZeroVector;              // from body 1 COM to contact
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	FVector R2 = FVector::ZeroVector;              // from body 2 COM to contact
+	FVector ContactPoint = FVector::ZeroVector; // world
 
-	UPROPERTY(VisibleAnywhere)
-	FVector VRel = FVector::ZeroVector;            // V1c - V2c at contact
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
 
-	UPROPERTY(VisibleAnywhere)
-	float VRelN = 0.0f;                            // dot(VRel, Normal)
+	FVector R1 = FVector::ZeroVector; // from body 1 COM to contact
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	FVector R2 = FVector::ZeroVector; // from body 2 COM to contact
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	FVector VRel = FVector::ZeroVector; // V1c - V2c at contact
+
+	UPROPERTY(BlueprintReadOnly, Category="AG Rigidbody|Contact")
+
+	float VRelN = 0.0f; // dot(VRel, Normal)
 };
 
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
@@ -62,6 +74,114 @@ class ADVANCEDGAMEPLAY_API UAG_RigidbodyComponent : public UActorComponent
 public:
 	UAG_RigidbodyComponent();
 
+	// -----------------------------
+	// Setup
+	// -----------------------------
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Setup")
+	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
+
+	// -----------------------------
+	// Forces / Gravity
+	// -----------------------------
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
+	void SetGravityDirection(
+		const FVector& NewGravityDirection,
+		float NewGravityStrength = 980.0f,
+		bool bWakeUp = true
+	);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
+	void AdjustGravityFromContactNormal(bool bWakeUp = false);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
+	void SetAdjustGravityToGround(bool bEnable);
+
+	UFUNCTION(BlueprintPure, Category="AG Rigidbody|Forces")
+	bool GetAdjustGravityToGround() const;
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
+	void AddForce(const FVector& Force);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
+	void AddTorque(const FVector& Torque);
+
+	// -----------------------------
+	// Angular
+	// -----------------------------
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Angular")
+	void SetRotationEnabled(bool bEnable, bool bClearSpin = false);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Angular")
+	void ClearSpin();
+
+	// -----------------------------
+	// Sleep / Wake
+	// -----------------------------
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Sleep")
+	void WakeUp();
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Sleep")
+	void ForceSleep();
+
+	// -----------------------------
+	// Control
+	// -----------------------------
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void StopMotion(bool bClearForces = true, bool bClearTorques = true, bool bWakeUp = true);
+
+	// Combined 2-axis input (existing)
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddDriveInput(float ForwardInput, float RightInput, float MaxAccelerationCm = 3000.0f,
+	                   float MaxSpeedCm = 2500.0f);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddRollTorqueInput(float ForwardInput, float RightInput, float MaxTorque = 500000.0f);
+
+	// New: per-axis input helpers (additive; do not remove combined version)
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddDriveForwardInput(float ForwardInput, float MaxAccelerationCm = 3000.0f, float MaxSpeedCm = 2500.0f);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddDriveRightInput(float RightInput, float MaxAccelerationCm = 3000.0f, float MaxSpeedCm = 2500.0f);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddRollTorqueForwardInput(float ForwardInput, float MaxTorque = 500000.0f);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void AddRollTorqueRightInput(float RightInput, float MaxTorque = 500000.0f);
+
+	// Braking (existing)
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplyBrake(float Strength, float FixedDeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplySpinBrake(float Strength, float FixedDeltaTime);
+
+	// New: per-axis planar brakes (separate forward vs sideways feel)
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplyForwardBrake(float Strength, float FixedDeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplySideBrake(float Strength, float FixedDeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplyForwardSpinBrake(float Strength, float FixedDeltaTime);
+
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void ApplySideSpinBrake(float Strength, float FixedDeltaTime);
+
+	// Queries (existing)
+	UFUNCTION(BlueprintPure, Category="AG Rigidbody|Control")
+	FVector GetPlanarVelocity() const;
+
+	UFUNCTION(BlueprintPure, Category="AG Rigidbody|Control")
+	float GetPlanarSpeed() const;
+
+	// Utility (existing)
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
+	void NudgeOutOfGeometry(float Distance = 2.0f);
+
+protected:
 	// --- UActorComponent ---
 	virtual void BeginPlay() override;
 	virtual void TickComponent(
@@ -70,37 +190,6 @@ public:
 		FActorComponentTickFunction* ThisTickFunction
 	) override;
 
-	// --- Public API ---
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Setup")
-	void SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent);
-
-	// GravityDirection is normalized internally.
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
-	void SetGravityDirection(
-		const FVector& NewGravityDirection,
-		float NewGravityStrength = 980.0f,
-		bool bWakeUp = true
-	);
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Angular")
-	void SetRotationEnabled(bool bEnable, bool bClearSpin = false);
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Angular")
-	void ClearSpin();
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
-	void AdjustGravityFromContactNormal(bool bWakeUp = false);
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
-	void AddForce(const FVector& Force);
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
-	void AddTorque(const FVector& Torque);
-
-	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Sleep")
-	void WakeUp();
-
-protected:
 	// --- Fixed-step simulation ---
 	void FixedUpdate(float FixedDeltaTime);
 
@@ -114,7 +203,7 @@ protected:
 	// Force contributions
 	void ApplyGravity();
 	void ApplyDragForce();
-	
+
 
 	// Collision response + sleeping
 	void HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime);
@@ -160,7 +249,7 @@ protected:
 	TEnumAsByte<ECollisionChannel> GroundProbeChannel = ECC_Visibility;
 
 	// 0 = no bounce, 1 = perfectly elastic
-	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision", meta=(ClampMin="0.0"))
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Collision", meta=(ClampMin="0.0", ClampMax="1.0"))
 	float Restitution = 0.0f;
 
 	// Friction
@@ -172,7 +261,7 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction", meta=(ClampMin="0.0"))
 	float DynamicFrictionCoeff = 0.3f;
-	
+
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Friction")
 	float TorsionalFrictionCoeff = 0.05f;
 
@@ -190,7 +279,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Angular")
 	bool bEnableRotation = true;
 
-		// When zero it recalculates as a solid sphere
+	// When zero it recalculates as a solid sphere
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Angular", meta=(ClampMin="0.0"))
 	float InertiaScalar = 0.0f;
 
@@ -202,7 +291,7 @@ protected:
 	bool bCanSleep = true;
 
 	// Dot(-GravityDirection, Normal) >= threshold => ground
-	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping", meta=(ClampMin="-1.0", ClampMax="2.0"))
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping", meta=(ClampMin="-1.0", ClampMax="1.0"))
 	float GroundNormalCosThreshold = 0.6f;
 
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping", meta=(ClampMin="0.0"))
@@ -214,6 +303,16 @@ protected:
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Sleeping", meta=(ClampMin="1"))
 	int32 MinFramesAtRest = 5;
 
+	// Limits	
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Limits", meta=(ClampMin="0.0"))
+	float MaxPlanarSpeed = 2500.0f;
+
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Limits", meta=(ClampMin="0.0"))
+	float MaxFallSpeed = 6000.0f; // 0 = disabled
+
+	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Limits", meta=(ClampMin="0.0"))
+	float MaxAngularSpeed = 50.0f;
+
 	// -----------------------------
 	// Runtime State (not editable)
 	// -----------------------------
@@ -222,10 +321,10 @@ protected:
 	UPrimitiveComponent* UpdatedComponent = nullptr;
 
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Runtime")
-	FVector Velocity = FVector::ZeroVector;              // cm/s
+	FVector Velocity = FVector::ZeroVector; // cm/s
 
 	UPROPERTY(EditAnywhere, Category="AG Rigidbody|Runtime")
-	FVector AngularVelocity = FVector::ZeroVector;       // rad/s
+	FVector AngularVelocity = FVector::ZeroVector; // rad/s
 
 	UPROPERTY(VisibleAnywhere, Category="AG Rigidbody|Runtime")
 	bool bIsGrounded = false;
@@ -250,6 +349,15 @@ protected:
 	FVector AccumulatedTorque = FVector::ZeroVector;
 
 private:
+	static void BuildPlanarBasis(
+		const UPrimitiveComponent* UpdatedComponent,
+		const FVector& Up,
+		FVector& OutForward,
+		FVector& OutRight
+	);
+	
+	static float ComputeBrakeAlpha(float Strength, float FixedDeltaTime);
+
 	// Step-local flags
 	bool bHadStaticContactThisStep = false;
 
@@ -275,14 +383,15 @@ private:
 	void SolveStaticContact(const FHitResult& Hit, float FixedDeltaTime);
 
 	void HandleBodyBodyContact(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, float FixedDeltaTime);
-	bool BuildBodyBodyContactData(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, FAGTwoBodyContactData& OutData) const;
+	bool BuildBodyBodyContactData(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit,
+	                              FAGTwoBodyContactData& OutData) const;
 	float ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* OtherBody, FAGTwoBodyContactData& Contact);
-	
+
 	void ApplyTwoBodyFrictionImpulse(
-	UAG_RigidbodyComponent* OtherBody,
-	const FAGTwoBodyContactData& Contact,
-	float NormalImpulseMagnitude
-);
+		UAG_RigidbodyComponent* OtherBody,
+		const FAGTwoBodyContactData& Contact,
+		float NormalImpulseMagnitude
+	);
 
 	void ApplyTwoBodyTorsionalFrictionImpulse(
 		UAG_RigidbodyComponent* OtherBody,
@@ -294,6 +403,9 @@ private:
 	{
 		return bEnableRotation ? AngularVelocity : FVector::ZeroVector;
 	}
+
+	// Limit helpers
+	void ClampSpeeds();
 
 	// Accumulated time since last fixed-step tick
 	float TimeAccumulator = 0.0f;

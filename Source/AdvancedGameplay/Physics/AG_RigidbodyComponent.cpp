@@ -9,6 +9,442 @@ UAG_RigidbodyComponent::UAG_RigidbodyComponent()
 	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 }
 
+void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
+{
+	if (!NewUpdatedComponent)
+	{
+		return;
+	}
+
+	NewUpdatedComponent->SetSimulatePhysics(false);
+	NewUpdatedComponent->SetCollisionEnabled(bEnableCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
+	UpdatedComponent = NewUpdatedComponent;
+	CachedRadius = UpdatedComponent->Bounds.SphereRadius;
+}
+
+
+void UAG_RigidbodyComponent::SetGravityDirection(
+	const FVector& NewGravityDirection,
+	float NewGravityStrength,
+	bool bWakeUp
+)
+{
+	// Reject zero input direction
+	if (NewGravityDirection.IsNearlyZero())
+	{
+		return;
+	}
+
+	GravityDirection = NewGravityDirection.GetSafeNormal();
+	
+	// Optionally update gravity strength
+	if (NewGravityStrength > 0.0f)
+	{
+		GravityStrength = NewGravityStrength;
+	}
+
+	// Optionally wake the body
+	if (bWakeUp)
+	{
+		WakeUp();
+	}
+}
+
+void UAG_RigidbodyComponent::AdjustGravityFromContactNormal(bool bWakeUp)
+{
+	if (!bHasLastGroundNormal)
+	{
+		return;
+	}
+
+	// Gravity should point "down", opposite the ground normal
+	const FVector NewGravityDir = -LastGroundNormal;
+
+	// Reuse the existing helper (keeps strength, optional wakeup and normalization)
+	SetGravityDirection(NewGravityDir, GravityStrength, bWakeUp);
+}
+
+void UAG_RigidbodyComponent::SetAdjustGravityToGround(bool bEnable)
+{
+	bAdjustGravityToGround = bEnable;
+}
+
+bool UAG_RigidbodyComponent::GetAdjustGravityToGround() const
+{
+	return bAdjustGravityToGround;
+}
+
+void UAG_RigidbodyComponent::AddForce(const FVector& Force)
+{
+	if (!Force.IsNearlyZero())
+	{
+		WakeUp();
+	}
+
+	AccumulatedForces += Force;
+}
+
+void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
+{
+	if (!Torque.IsNearlyZero())
+	{
+		WakeUp();
+	}
+
+	AccumulatedTorque += Torque;
+}
+
+void UAG_RigidbodyComponent::SetRotationEnabled(bool bEnable, bool bClearSpin)
+{
+	bEnableRotation = bEnable;
+
+	if (bClearSpin && (!AngularVelocity.IsNearlyZero() || !AccumulatedTorque.IsNearlyZero()))
+	{
+		ClearSpin();
+	}
+}
+
+void UAG_RigidbodyComponent::ClearSpin()
+{
+	AngularVelocity = FVector::ZeroVector;
+	AccumulatedTorque = FVector::ZeroVector;
+	WakeUp();
+}
+
+void UAG_RigidbodyComponent::WakeUp()
+{
+	bSleeping    = false;
+	FramesAtRest = 0;
+}
+
+void UAG_RigidbodyComponent::ForceSleep()
+{
+	// Zero all motion
+	Velocity = FVector::ZeroVector;
+	AngularVelocity = FVector::ZeroVector;
+
+	// Clear accumulators
+	AccumulatedForces = FVector::ZeroVector;
+	AccumulatedTorque = FVector::ZeroVector;
+
+	// Reset contact / grounded state
+	bIsGrounded = false;
+	bHasLastGroundNormal = false;
+
+	// Enter sleep immediately
+	bSleeping = true;
+	FramesAtRest = MinFramesAtRest;
+}
+
+void UAG_RigidbodyComponent::StopMotion(bool bClearForces, bool bClearTorques, bool bWakeUp)
+{
+	Velocity = FVector::ZeroVector;
+	AngularVelocity = FVector::ZeroVector;
+
+	if (bClearForces)
+	{
+		AccumulatedForces = FVector::ZeroVector;
+	}
+	if (bClearTorques)
+	{
+		AccumulatedTorque = FVector::ZeroVector;
+	}
+
+	if (bWakeUp)
+	{
+		WakeUp();
+	}
+}
+
+void UAG_RigidbodyComponent::AddDriveInput(float ForwardInput, float RightInput, float MaxAccelerationCm, float MaxSpeedCm)
+{
+	if (Mass <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float ClampedForward = FMath::Clamp(ForwardInput, -1.0f, 1.0f);
+	const float ClampedRight   = FMath::Clamp(RightInput,   -1.0f, 1.0f);
+
+	FVector Input = FVector(ClampedForward, ClampedRight, 0.0f);
+	if (Input.IsNearlyZero())
+	{
+		return;
+	}
+	Input = Input.GetSafeNormal();
+
+	if (!UpdatedComponent)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection.GetSafeNormal();
+
+	// Build a planar basis from the component orientation
+	FVector Fwd = UpdatedComponent->GetForwardVector();
+	FVector Rgt = UpdatedComponent->GetRightVector();
+
+	Fwd = FVector::VectorPlaneProject(Fwd, Up).GetSafeNormal();
+	Rgt = FVector::VectorPlaneProject(Rgt, Up).GetSafeNormal();
+
+	if (Fwd.IsNearlyZero() || Rgt.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector WishDir = (Fwd * Input.X + Rgt * Input.Y).GetSafeNormal();
+	if (WishDir.IsNearlyZero())
+	{
+		return;
+	}
+
+	// Speed cap (only blocks further acceleration in the same direction)
+	if (MaxSpeedCm > 0.0f)
+	{
+		const FVector PlanarV = GetPlanarVelocity();
+		const float PlanarSpeed = PlanarV.Size();
+
+		if (PlanarSpeed >= MaxSpeedCm)
+		{
+			const float AlongWish = FVector::DotProduct(PlanarV, WishDir);
+			if (AlongWish > 0.0f)
+			{
+				return; // already at/over cap, and trying to accelerate further
+			}
+		}
+	}
+
+	const float Accel = FMath::Max(0.0f, MaxAccelerationCm);
+	if (Accel <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector Force = WishDir * (Accel * Mass);
+	AddForce(Force);
+}
+
+void UAG_RigidbodyComponent::AddRollTorqueInput(float ForwardInput, float RightInput, float MaxTorque)
+{
+	const float ClampedForward = FMath::Clamp(ForwardInput, -1.0f, 1.0f);
+	const float ClampedRight   = FMath::Clamp(RightInput,   -1.0f, 1.0f);
+
+	FVector Input = FVector(ClampedForward, ClampedRight, 0.0f);
+	if (Input.IsNearlyZero())
+	{
+		return;
+	}
+	Input = Input.GetSafeNormal();
+
+	if (!UpdatedComponent)
+	{
+		return;
+	}
+
+	const float TorqueMag = FMath::Max(0.0f, MaxTorque);
+	if (TorqueMag <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection.GetSafeNormal();
+
+	FVector Fwd = UpdatedComponent->GetForwardVector();
+	FVector Rgt = UpdatedComponent->GetRightVector();
+
+	Fwd = FVector::VectorPlaneProject(Fwd, Up).GetSafeNormal();
+	Rgt = FVector::VectorPlaneProject(Rgt, Up).GetSafeNormal();
+
+	if (Fwd.IsNearlyZero() || Rgt.IsNearlyZero())
+	{
+		return;
+	}
+
+	const FVector WishDir = (Fwd * Input.X + Rgt * Input.Y).GetSafeNormal();
+	if (WishDir.IsNearlyZero())
+	{
+		return;
+	}
+
+	// Roll axis that produces motion along WishDir on the plane:
+	// axis = WishDir x Up
+	const FVector RollAxis = FVector::CrossProduct(WishDir, Up).GetSafeNormal();
+	if (RollAxis.IsNearlyZero())
+	{
+		return;
+	}
+
+	AddTorque(RollAxis * TorqueMag);
+}
+
+
+void UAG_RigidbodyComponent::AddDriveForwardInput(float ForwardInput, float MaxAccelerationCm, float MaxSpeedCm)
+{
+	AddDriveInput(ForwardInput, 0.0f, MaxAccelerationCm, MaxSpeedCm);
+}
+
+void UAG_RigidbodyComponent::AddDriveRightInput(float RightInput, float MaxAccelerationCm, float MaxSpeedCm)
+{
+	AddDriveInput(0.0f, RightInput, MaxAccelerationCm, MaxSpeedCm);
+}
+
+void UAG_RigidbodyComponent::AddRollTorqueForwardInput(float ForwardInput, float MaxTorque)
+{
+	AddRollTorqueInput(ForwardInput, 0.0f, MaxTorque);
+}
+
+void UAG_RigidbodyComponent::AddRollTorqueRightInput(float RightInput, float MaxTorque)
+{
+	AddRollTorqueInput(0.0f, RightInput, MaxTorque);
+}
+
+void UAG_RigidbodyComponent::ApplyBrake(float Strength, float FixedDeltaTime)
+{
+	ApplyForwardBrake(Strength, FixedDeltaTime);
+	ApplySideBrake(Strength, FixedDeltaTime);
+}
+
+void UAG_RigidbodyComponent::ApplySpinBrake(float Strength, float FixedDeltaTime)
+{
+	ApplyForwardSpinBrake(Strength, FixedDeltaTime);
+	ApplySideSpinBrake(Strength, FixedDeltaTime);
+}
+
+
+
+void UAG_RigidbodyComponent::ApplyForwardBrake(float Strength, float FixedDeltaTime)
+{
+	if (!UpdatedComponent || Strength <= 0.0f || FixedDeltaTime <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection; // option A
+	FVector Fwd, Right;
+	BuildPlanarBasis(UpdatedComponent, Up, Fwd, Right);
+
+	const float Alpha = ComputeBrakeAlpha(Strength, FixedDeltaTime);
+
+	const float VForward = FVector::DotProduct(Velocity, Fwd);
+	Velocity -= (VForward * Alpha) * Fwd;
+}
+
+void UAG_RigidbodyComponent::ApplySideBrake(float Strength, float FixedDeltaTime)
+{
+	if (!UpdatedComponent || Strength <= 0.0f || FixedDeltaTime <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection; // option A
+	FVector Fwd, Right;
+	BuildPlanarBasis(UpdatedComponent, Up, Fwd, Right);
+
+	const float Alpha = ComputeBrakeAlpha(Strength, FixedDeltaTime);
+
+	const float VSide = FVector::DotProduct(Velocity, Right);
+	Velocity -= (VSide * Alpha) * Right;
+}
+
+void UAG_RigidbodyComponent::ApplyForwardSpinBrake(float Strength, float FixedDeltaTime)
+{
+	if (!bEnableRotation || InertiaScalar <= SMALL_NUMBER || !UpdatedComponent || Strength <= 0.0f || FixedDeltaTime <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection; // option A
+	FVector Fwd, Right;
+	BuildPlanarBasis(UpdatedComponent, Up, Fwd, Right);
+
+	const float Alpha = ComputeBrakeAlpha(Strength, FixedDeltaTime);
+
+	// Rolling forward corresponds primarily to spin about the Right axis
+	const float OmegaAboutRight = FVector::DotProduct(AngularVelocity, Right);
+	AngularVelocity -= (OmegaAboutRight * Alpha) * Right;
+}
+
+void UAG_RigidbodyComponent::ApplySideSpinBrake(float Strength, float FixedDeltaTime)
+{
+	if (!bEnableRotation || InertiaScalar <= SMALL_NUMBER || !UpdatedComponent || Strength <= 0.0f || FixedDeltaTime <= 0.0f)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection; // option A
+	FVector Fwd, Right;
+	BuildPlanarBasis(UpdatedComponent, Up, Fwd, Right);
+
+	const float Alpha = ComputeBrakeAlpha(Strength, FixedDeltaTime);
+
+	// Rolling sideways corresponds primarily to spin about the Forward axis
+	const float OmegaAboutForward = FVector::DotProduct(AngularVelocity, Fwd);
+	AngularVelocity -= (OmegaAboutForward * Alpha) * Fwd;
+}
+
+
+void UAG_RigidbodyComponent::BuildPlanarBasis(const UPrimitiveComponent* UpdatedComponent, const FVector& Up,
+	FVector& OutForward, FVector& OutRight)
+{
+	// Use component axes, projected onto the plane orthogonal to Up
+	const FVector Fwd = UpdatedComponent ? UpdatedComponent->GetForwardVector() : FVector::ForwardVector;
+	const FVector Rgt = UpdatedComponent ? UpdatedComponent->GetRightVector()   : FVector::RightVector;
+
+	OutForward = FVector::VectorPlaneProject(Fwd, Up).GetSafeNormal();
+	OutRight   = FVector::VectorPlaneProject(Rgt, Up).GetSafeNormal();
+
+	// Fallbacks in degenerate cases
+	if (OutForward.IsNearlyZero())
+	{
+		OutForward = FVector::VectorPlaneProject(FVector::ForwardVector, Up).GetSafeNormal();
+	}
+	if (OutRight.IsNearlyZero())
+	{
+		OutRight = FVector::CrossProduct(Up, OutForward).GetSafeNormal();
+	}
+}
+
+float UAG_RigidbodyComponent::ComputeBrakeAlpha(float Strength, float FixedDeltaTime)
+{
+	// Strength is a rate-like value (1/s). Clamp so we don't overshoot.
+	return FMath::Clamp(Strength * FixedDeltaTime, 0.0f, 1.0f);
+}
+
+FVector UAG_RigidbodyComponent::GetPlanarVelocity() const
+{
+	const FVector Up = -GravityDirection.GetSafeNormal();
+	const float vUp = FVector::DotProduct(Velocity, Up);
+	return Velocity - vUp * Up;
+}
+
+float UAG_RigidbodyComponent::GetPlanarSpeed() const
+{
+	return GetPlanarVelocity().Size();
+}
+
+void UAG_RigidbodyComponent::NudgeOutOfGeometry(float Distance)
+{
+	if (!UpdatedComponent)
+	{
+		return;
+	}
+
+	const float D = FMath::Max(0.0f, Distance);
+	if (D <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection.GetSafeNormal();
+	const FVector Delta = Up * D;
+
+	// Try to move out with sweep so we don't tunnel further into something
+	FHitResult Hit;
+	UpdatedComponent->MoveComponent(Delta, UpdatedComponent->GetComponentQuat(), true, &Hit);
+
+	WakeUp();
+}
+
 void UAG_RigidbodyComponent::BeginPlay()
 {
 	Super::BeginPlay();
@@ -62,7 +498,6 @@ void UAG_RigidbodyComponent::BeginPlay()
 	}
 }
 
-
 void UAG_RigidbodyComponent::TickComponent(
 	float DeltaTime,
 	enum ELevelTick TickType,
@@ -89,103 +524,6 @@ void UAG_RigidbodyComponent::TickComponent(
 	}
 }
 
-void UAG_RigidbodyComponent::SetUpdatedComponent(UPrimitiveComponent* NewUpdatedComponent)
-{
-	if (!NewUpdatedComponent)
-	{
-		return;
-	}
-
-	NewUpdatedComponent->SetSimulatePhysics(false);
-	NewUpdatedComponent->SetCollisionEnabled(bEnableCollision ? ECollisionEnabled::QueryAndPhysics : ECollisionEnabled::NoCollision);
-	UpdatedComponent = NewUpdatedComponent;
-	CachedRadius = UpdatedComponent->Bounds.SphereRadius;
-}
-
-void UAG_RigidbodyComponent::SetGravityDirection(
-	const FVector& NewGravityDirection,
-	float NewGravityStrength,
-	bool bWakeUp
-)
-{
-	// Reject zero input direction
-	if (NewGravityDirection.IsNearlyZero())
-	{
-		return;
-	}
-
-	GravityDirection = NewGravityDirection.GetSafeNormal();
-	
-	// Optionally update gravity strength
-	if (NewGravityStrength > 0.0f)
-	{
-		GravityStrength = NewGravityStrength;
-	}
-
-	// Optionally wake the body
-	if (bWakeUp)
-	{
-		WakeUp();
-	}
-}
-
-void UAG_RigidbodyComponent::SetRotationEnabled(bool bEnable, bool bClearSpin)
-{
-	bEnableRotation = bEnable;
-
-	if (bClearSpin && (!AngularVelocity.IsNearlyZero() || !AccumulatedTorque.IsNearlyZero()))
-	{
-		ClearSpin();
-	}
-}
-
-void UAG_RigidbodyComponent::ClearSpin()
-{
-	AngularVelocity = FVector::ZeroVector;
-	AccumulatedTorque = FVector::ZeroVector;
-	WakeUp();
-}
-
-void UAG_RigidbodyComponent::AdjustGravityFromContactNormal(bool bWakeUp)
-{
-	if (!bHasLastGroundNormal)
-	{
-		return;
-	}
-
-	// Gravity should point "down", opposite the ground normal
-	const FVector NewGravityDir = -LastGroundNormal;
-
-	// Reuse the existing helper (keeps strength, optional wakeup and normalization)
-	SetGravityDirection(NewGravityDir, GravityStrength, bWakeUp);
-}
-
-void UAG_RigidbodyComponent::AddForce(const FVector& Force)
-{
-	if (!Force.IsNearlyZero())
-	{
-		WakeUp();
-	}
-
-	AccumulatedForces += Force;
-}
-
-void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
-{
-	if (!Torque.IsNearlyZero())
-	{
-		WakeUp();
-	}
-
-	AccumulatedTorque += Torque;
-}
-
-void UAG_RigidbodyComponent::WakeUp()
-{
-	bSleeping    = false;
-	FramesAtRest = 0;
-}
-
 
 void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 {
@@ -206,11 +544,12 @@ void UAG_RigidbodyComponent::FixedUpdate(float FixedDeltaTime)
 	IntegrateForces();
 	IntegrateVelocity(FixedDeltaTime);
 	IntegrateAngularVelocity(FixedDeltaTime);
-	IntegrateAngularDrag(FixedDeltaTime);
 
 	DoMovementAndCollisions(FixedDeltaTime);
 	SolveGroundContactFriction(FixedDeltaTime);
+	IntegrateAngularDrag(FixedDeltaTime);
 	
+	ClampSpeeds();
 	ApplyRotation(FixedDeltaTime);
 
 	UpdateSleepState();
@@ -247,6 +586,18 @@ void UAG_RigidbodyComponent::IntegrateAngularVelocity(float FixedDeltaTime)
 
 	// Semi-implicit Euler for rotation: ω_{n+1} = ω_n + α Δt
 	AngularVelocity += AngularAcceleration * FixedDeltaTime;
+}
+
+void UAG_RigidbodyComponent::IntegrateAngularDrag(float FixedDeltaTime)
+{
+	if (!bEnableRotation || AngularDragCoeff <= 0.0f || InertiaScalar <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	// ω_{n+1} = ω_n / (1 + (c/I) dt)
+	const float Denom = 1.0f + (AngularDragCoeff / InertiaScalar) * FixedDeltaTime;
+	AngularVelocity /= Denom;
 }
 
 void UAG_RigidbodyComponent::DoMovementAndCollisions(float FixedDeltaTime)
@@ -358,18 +709,6 @@ void UAG_RigidbodyComponent::ApplyDragForce()
 	}
 
 	AccumulatedForces += DragForce;
-}
-
-void UAG_RigidbodyComponent::IntegrateAngularDrag(float FixedDeltaTime)
-{
-	if (!bEnableRotation || AngularDragCoeff <= 0.0f || InertiaScalar <= SMALL_NUMBER)
-	{
-		return;
-	}
-
-	// ω_{n+1} = ω_n / (1 + (c/I) dt)
-	const float Denom = 1.0f + (AngularDragCoeff / InertiaScalar) * FixedDeltaTime;
-	AngularVelocity /= Denom;
 }
 
 void UAG_RigidbodyComponent::HandleBlockingHit(const FHitResult& Hit, float FixedDeltaTime)
@@ -1189,6 +1528,62 @@ void UAG_RigidbodyComponent::ApplyTwoBodyTorsionalFrictionImpulse(
 	if (bOtherRot)
 	{
 		OtherBody->AngularVelocity -= (Jw / OtherBody->InertiaScalar) * N;
+	}
+}
+
+void UAG_RigidbodyComponent::ClampSpeeds()
+{
+	// ----------------------------
+	// 1) Linear velocity
+	// ----------------------------
+
+	if (MaxPlanarSpeed > 0.0f)
+	{
+		// Define "up"
+		const FVector Up = /*
+			(bIsGrounded && bHasLastGroundNormal)
+			? LastGroundNormal
+			:*/ -GravityDirection;
+
+		// Decompose velocity
+		const float Vn = FVector::DotProduct(Velocity, Up);
+		const FVector VNormal = Vn * Up;
+		FVector VPlanar = Velocity - VNormal;
+
+		const float PlanarSpeed = VPlanar.Size();
+		if (PlanarSpeed > MaxPlanarSpeed)
+		{
+			VPlanar *= (MaxPlanarSpeed / PlanarSpeed);
+			Velocity = VPlanar + VNormal;
+		}
+	}
+
+	// ----------------------------
+	// 2) Fall speed
+	// ----------------------------
+
+	if (MaxFallSpeed > 0.0f)
+	{
+		// GravityDirection points *down*
+		const float Vg = FVector::DotProduct(Velocity, GravityDirection);
+
+		if (Vg > MaxFallSpeed)
+		{
+			Velocity -= (Vg - MaxFallSpeed) * GravityDirection;
+		}
+	}
+
+	// ----------------------------
+	// 3) Angular velocity
+	// ----------------------------
+
+	if (bEnableRotation && MaxAngularSpeed > 0.0f)
+	{
+		const float Omega = AngularVelocity.Size();
+		if (Omega > MaxAngularSpeed)
+		{
+			AngularVelocity *= (MaxAngularSpeed / Omega);
+		}
 	}
 }
 
