@@ -132,7 +132,7 @@ public:
 	// Combined 2-axis input (existing)
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
 	void AddDriveInput(float ForwardInput, float RightInput, float MaxAccelerationCm = 3000.0f,
-	                   float MaxSpeedCm = 2500.0f);
+					   float MaxSpeedCm = 2500.0f);
 
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
 	void AddRollTorqueInput(float ForwardInput, float RightInput, float MaxTorque = 500000.0f);
@@ -349,42 +349,57 @@ protected:
 	FVector AccumulatedTorque = FVector::ZeroVector;
 
 private:
+	// -----------------------------
+	// Control math helpers
+	// -----------------------------
 	static void BuildPlanarBasis(
 		const UPrimitiveComponent* UpdatedComponent,
 		const FVector& Up,
 		FVector& OutForward,
 		FVector& OutRight
 	);
-	
+
 	static float ComputeBrakeAlpha(float Strength, float FixedDeltaTime);
 
-	// Step-local flags
+	// -----------------------------
+	// Per-step flags
+	// -----------------------------
 	bool bHadStaticContactThisStep = false;
 
-	// Ground / contact helpers
+	// -----------------------------
+	// Ground / contact classification
+	// -----------------------------
 	void SolveGroundContactFriction(float FixedDeltaTime);
 	float UpdateGroundStateFromNormal(const FVector& ContactNormal);
 	bool TryGetGroundHit(FHitResult& OutHit) const;
+
+	// -----------------------------
+	// Friction + torsional friction (single-body contact)
+	// -----------------------------
 	float ComputeTorsionalRadius(const FVector& ContactNormal) const;
 	void ApplyTorsionalFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot);
+	void ApplyFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot);
 
-
-	// Rotation application (post-collision)
-	void ApplyRotation(float FixedDeltaTime) const;
-
-	// Static contact helpers
+	// -----------------------------
+	// Contact building + impulses (single-body)
+	// -----------------------------
 	bool BuildContactData(const FHitResult& Hit, FAGContactData& OutData) const;
 	void ApplyNormalImpulse(FAGContactData& Contact);
-	void ApplyFrictionImpulse(FAGContactData& Contact, float FixedDeltaTime, float UpDot);
 	void ClampContactNormalRestVelocity(FAGContactData& Contact);
 
-	// Body-body contact helpers
+	// -----------------------------
+	// Body-body contact solve
+	// -----------------------------
 	bool TrySolveBodyBody(const FHitResult& Hit, float FixedDeltaTime);
 	void SolveStaticContact(const FHitResult& Hit, float FixedDeltaTime);
 
 	void HandleBodyBodyContact(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit, float FixedDeltaTime);
-	bool BuildBodyBodyContactData(UAG_RigidbodyComponent* OtherBody, const FHitResult& Hit,
-	                              FAGTwoBodyContactData& OutData) const;
+	bool BuildBodyBodyContactData(
+		UAG_RigidbodyComponent* OtherBody,
+		const FHitResult& Hit,
+		FAGTwoBodyContactData& OutData
+	) const;
+
 	float ApplyTwoBodyNormalImpulse(UAG_RigidbodyComponent* OtherBody, FAGTwoBodyContactData& Contact);
 
 	void ApplyTwoBodyFrictionImpulse(
@@ -399,14 +414,21 @@ private:
 		float NormalImpulseMagnitude
 	);
 
-	FORCEINLINE FVector GetContactAngularVelocity() const
-	{
-		return bEnableRotation ? AngularVelocity : FVector::ZeroVector;
-	}
+	// -----------------------------
+	// Rotation application
+	// -----------------------------
+	void ApplyRotation(float FixedDeltaTime) const;
 
-	// Limit helpers
+	FVector GetContactAngularVelocity() const;
+
+	// -----------------------------
+	// Limits
+	// -----------------------------
 	void ClampSpeeds();
 
-	// Accumulated time since last fixed-step tick
+	// -----------------------------
+	// Fixed-step accumulator
+	// -----------------------------
 	float TimeAccumulator = 0.0f;
 };
+

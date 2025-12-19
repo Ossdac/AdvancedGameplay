@@ -920,6 +920,11 @@ void UAG_RigidbodyComponent::ApplyRotation(float FixedDeltaTime) const
 	UpdatedComponent->AddWorldRotation(DeltaRot, false);
 }
 
+FVector UAG_RigidbodyComponent::GetContactAngularVelocity() const
+{
+	return bEnableRotation ? AngularVelocity : FVector::ZeroVector;
+}
+
 bool UAG_RigidbodyComponent::BuildContactData(
 	const FHitResult& Hit,
 	FAGContactData& OutData
