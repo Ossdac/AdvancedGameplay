@@ -74,6 +74,11 @@ bool UAG_RigidbodyComponent::GetAdjustGravityToGround() const
 	return bAdjustGravityToGround;
 }
 
+FVector UAG_RigidbodyComponent::GetGravityDirection() const
+{
+	return GravityDirection;
+}
+
 void UAG_RigidbodyComponent::AddForce(const FVector& Force)
 {
 	if (!Force.IsNearlyZero())

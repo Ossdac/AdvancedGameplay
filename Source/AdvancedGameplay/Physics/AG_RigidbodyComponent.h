@@ -98,6 +98,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="AG Rigidbody|Forces")
 	bool GetAdjustGravityToGround() const;
+	
+	UFUNCTION(Blueprintable, Category="AG Rigidbody|Forces")
+	FVector GetGravityDirection() const;
 
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
 	void AddForce(const FVector& Force);
