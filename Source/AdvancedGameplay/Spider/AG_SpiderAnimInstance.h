@@ -4,23 +4,38 @@
 #include "Animation/AnimInstance.h"
 #include "AG_SpiderAnimInstance.generated.h"
 
-USTRUCT(BlueprintType)
-struct FSpiderLegPose
-{
-	GENERATED_BODY()
-
-	// Rotation to apply to the leg root/hip bone (local space)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FRotator HipLocalRotation = FRotator::ZeroRotator;
-};
-
 UCLASS()
-class YOURGAME_API UAG_SpiderAnimInstance : public UAnimInstance
+class ADVANCEDGAMEPLAY_API UAG_SpiderAnimInstance : public UAnimInstance
 {
 	GENERATED_BODY()
 
 public:
-	// 8 entries: L1..L4, R1..R4 (match your ordering)
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Spider")
-	TArray<FSpiderLegPose> Legs;
+	virtual void NativeInitializeAnimation() override;
+	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+
+	// 8 legs: 0..3 left (Leg1..Leg4), 4..7 right (Leg1..Leg4)
+	UPROPERTY(BlueprintReadOnly, Category="Spider|Gait")
+	TArray<float> LegSwingDegrees;
+
+	UPROPERTY(BlueprintReadOnly, Category="Spider|Gait")
+	bool bIsMoving = false;
+
+	UPROPERTY(BlueprintReadOnly, Category="Spider|Gait")
+	float Speed = 0.0f;
+
+protected:
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Spider|Gait")
+	float MaxSwingDeg = 25.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Spider|Gait")
+	float StepFrequencyHz = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Spider|Gait")
+	float SpeedForFullGait = 250.0f;
+
+private:
+	UPROPERTY(Transient)
+	APawn* OwningPawn = nullptr;
+
+	float GaitTime = 0.0f;
 };
