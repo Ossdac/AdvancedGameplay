@@ -52,4 +52,8 @@ struct FSpiderLegRuntime
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector StepEndWorld = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	FVector RestOffset_Component = FVector::ZeroVector;
+	
 };

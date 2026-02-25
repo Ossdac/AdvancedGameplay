@@ -50,11 +50,15 @@ public:
 	// 8 legs
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rig")
 	TArray<FSpiderLegRuntime> Legs;
+	
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float MaxSnapToGround = 5.0f;
 
 private:
 	float AccumTime = 0.0f;
 	
 	int32 PrevHalf = -1;
+	
 
 	// group toggle each half-cycle
 	bool bGroupASwings = true;

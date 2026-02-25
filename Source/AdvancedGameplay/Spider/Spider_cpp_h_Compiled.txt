@@ -1,3 +1,11 @@
+Files compiled from: C:\Users\ossia\Documents\GitHub\AdvancedGameplay\Source\AdvancedGameplay\Spider
+Included extensions: .cpp, .h
+Search depth: 4
+==================================================
+
+
+
+=== FILE: ProceduralSpiderGaitComponent.cpp ===
 #include "ProceduralSpiderGaitComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/World.h"
@@ -58,17 +66,8 @@ void UProceduralSpiderGaitComponent::InitializeDefaultsIfEmpty()
 		FVector HitP, HitN;
 		if (SampleGround(From, HitP, HitN))
 		{
-			const float SnapDist = FVector::Dist(HitP, FootWorld);
-			if (SnapDist <= MaxSnapToGround)
-			{
-				Leg.PlantedWorld = HitP;
-				Leg.IKTargetWorld = FTransform(Owner->GetActorRotation(), HitP);
-			}
-			else
-			{
-				Leg.PlantedWorld = FootWorld;
-				Leg.IKTargetWorld = FTransform(Owner->GetActorRotation(), FootWorld);
-			}
+			Leg.PlantedWorld = HitP;
+			Leg.IKTargetWorld = FTransform(Owner->GetActorRotation(), HitP);
 		}
 		else
 		{
@@ -172,13 +171,9 @@ FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLeg
 	FVector HitP, HitN;
 	if (SampleGround(Guess + FVector(0, 0, TraceUp), HitP, HitN))
 	{
-		// Only accept the ground-projected point if it's not a huge correction
-		if (FVector::Dist(HitP, Guess) <= MaxSnapToGround)
-		{
-			return HitP;
-		}
+		return HitP;
 	}
-	return Guess; // not planted world
+	return Leg.PlantedWorld;
 }
 
 void UProceduralSpiderGaitComponent::BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld)
@@ -251,3 +246,266 @@ bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& Out
 	}
 	return false;
 }
+
+=== FILE: ProceduralSpiderGaitComponent.h ===
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "SpiderGaitTypes.h"
+#include "ProceduralSpiderGaitComponent.generated.h"
+
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+class ADVANCEDGAMEPLAY_API UProceduralSpiderGaitComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UProceduralSpiderGaitComponent();
+
+	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	// Read by AnimInstance
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const;
+
+public:
+	// --- Gait tuning (based on paper ranges) ---
+	// Duty factor > 0.6 means long stance time.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float DutyFactor = 0.68f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float CycleSeconds = 1.6f; // typical gait cycle ~1.55–1.77s in the referenced study
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepTriggerDistance = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepReachForward = 12.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float TraceUp = 30.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float TraceDown = 80.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_WorldStatic;
+
+	// 8 legs
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rig")
+	TArray<FSpiderLegRuntime> Legs;
+
+private:
+	float AccumTime = 0.0f;
+	
+	int32 PrevHalf = -1;
+
+	// group toggle each half-cycle
+	bool bGroupASwings = true;
+
+private:
+	void InitializeDefaultsIfEmpty();
+	void UpdateCycle(float DeltaTime);
+	void UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float Cycle01);
+
+	bool IsLegInGroupA(ESpiderLeg LegId) const;
+	bool IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const;
+
+	bool SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const;
+	FVector ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const;
+
+	void BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld);
+	void TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration);
+};
+
+=== FILE: SpiderAnimInstance.cpp ===
+#include "SpiderAnimInstance.h"
+#include "ProceduralSpiderGaitComponent.h"
+#include "GameFramework/Pawn.h"
+
+void USpiderAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
+{
+	APawn* Pawn = TryGetPawnOwner();
+	if (!Pawn) return;
+
+	SpiderGait = Pawn->FindComponentByClass<UProceduralSpiderGaitComponent>();
+	if (!SpiderGait) return;
+
+	IKTargets.SetNum(8);
+	
+	USkeletalMeshComponent* SkelComp = GetSkelMeshComponent();
+	
+	for (int i = 0; i < 8; ++i)
+	{
+		ESpiderLeg Leg = static_cast<ESpiderLeg>(i);
+		FTransform Target;
+		if (SpiderGait->GetIKTarget(Leg, Target))
+		{
+			if (SkelComp)
+			{
+				IKTargets[i] = Target.GetRelativeTransform(SkelComp->GetComponentTransform());
+			}
+		}
+	}
+}
+
+bool USpiderAnimInstance::GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const
+{
+	const int32 Index = static_cast<int32>(Leg);
+	if (!IKTargets.IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	OutWorldTarget = IKTargets[Index];
+	return true;
+}
+
+
+=== FILE: SpiderAnimInstance.h ===
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Animation/AnimInstance.h"
+#include "SpiderGaitTypes.h"
+#include "SpiderAnimInstance.generated.h"
+
+class UProceduralSpiderGaitComponent;
+
+UCLASS()
+class ADVANCEDGAMEPLAY_API USpiderAnimInstance : public UAnimInstance
+{
+	GENERATED_BODY()
+
+public:
+	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+
+	// Optional: expose a getter instead of a TMap for easier AnimGraph wiring later.
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const;
+
+protected:
+	UPROPERTY(Transient, BlueprintReadOnly)
+	TObjectPtr<UProceduralSpiderGaitComponent> SpiderGait;
+
+	// A TMap is awkward to use in AnimGraph/Blueprint. Works in C++, but pain in BP.
+	UPROPERTY(Transient, BlueprintReadOnly)
+	TArray<FTransform> IKTargets; // size 8, index = (int)ESpiderLeg
+};
+
+=== FILE: SpiderCharacter.cpp ===
+#include "SpiderCharacter.h"
+#include "ProceduralSpiderGaitComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+
+ASpiderCharacter::ASpiderCharacter()
+{
+	PrimaryActorTick.bCanEverTick = true;
+
+	// Character defaults that usually help for creatures
+	GetCharacterMovement()->bOrientRotationToMovement = true;
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+
+	// You can tune these later
+	GetCharacterMovement()->MaxWalkSpeed = 200.0f;
+	GetCharacterMovement()->BrakingDecelerationWalking = 2048.0f;
+
+	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("ProceduralSpiderGait"));
+}
+
+void ASpiderCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+}
+
+=== FILE: SpiderCharacter.h ===
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Character.h"
+#include "SpiderCharacter.generated.h"
+
+class UProceduralSpiderGaitComponent;
+
+UCLASS()
+class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
+{
+	GENERATED_BODY()
+
+public:
+	ASpiderCharacter();
+
+protected:
+	virtual void BeginPlay() override;
+
+public:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Spider")
+	TObjectPtr<UProceduralSpiderGaitComponent> SpiderGait;
+};
+
+=== FILE: SpiderGaitTypes.h ===
+// SpiderGaitTypes.h
+#pragma once
+
+#include "CoreMinimal.h"
+#include "SpiderGaitTypes.generated.h"
+
+UENUM(BlueprintType)
+enum class ESpiderLeg : uint8
+{
+	L1, L2, L3, L4,
+	R1, R2, R3, R4
+};
+
+USTRUCT(BlueprintType)
+struct FSpiderLegRuntime
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	ESpiderLeg LegId = ESpiderLeg::L1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName IKBoneName;          // e.g. Leg1_IKtarsus_L
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName EndBoneName;         // e.g. Leg1_tarsus_L
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bInStance = true;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bStepping = false;
+
+	UPROPERTY(BlueprintReadOnly)
+	float PhaseOffset = 0.0f;  // per-leg offset within cycle
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector PlantedWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector DesiredWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FTransform IKTargetWorld = FTransform::Identity;
+
+	// Swing interpolation
+	UPROPERTY(BlueprintReadOnly)
+	float StepAlpha = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector StepStartWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector StepEndWorld = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	FVector RestOffset_Component = FVector::ZeroVector;
+};
