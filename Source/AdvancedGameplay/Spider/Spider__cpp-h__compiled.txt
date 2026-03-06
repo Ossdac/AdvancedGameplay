@@ -1,0 +1,898 @@
+// FILE: ProceduralSpiderGaitComponent.cpp  |  SHA1(utf8): 09b442aaadc3
+// ProceduralSpiderGaitComponent.cpp
+
+#include "ProceduralSpiderGaitComponent.h"
+#include "DrawDebugHelpers.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
+#include "GameFramework/Character.h"
+
+UProceduralSpiderGaitComponent::UProceduralSpiderGaitComponent()
+{
+	PrimaryComponentTick.bCanEverTick = true;
+}
+
+void UProceduralSpiderGaitComponent::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimerForNextTick(this, &UProceduralSpiderGaitComponent::InitializeFromCurrentPose);
+	}
+}
+
+void UProceduralSpiderGaitComponent::TickComponent(
+	float DeltaTime,
+	ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!bInitializedFromPose)
+	{
+		return;
+	}
+
+	UpdateCycle(DeltaTime);
+
+	for (FSpiderLegRuntime& Leg : Legs)
+	{
+		UpdateLeg(Leg, DeltaTime, 0.f);
+	}
+}
+
+void UProceduralSpiderGaitComponent::InitializeFromCurrentPose()
+{
+	if (bInitializedFromPose)
+	{
+		return;
+	}
+
+	InitializeDefaultsIfEmpty();
+
+	AActor* Owner = GetOwner();
+	if (!Owner) return;
+
+	ACharacter* Character = Cast<ACharacter>(Owner);
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!Mesh) return;
+
+	// Ensure bone/socket queries are valid right now
+	Mesh->RefreshBoneTransforms();
+	Mesh->FinalizeBoneTransform();
+
+	const FTransform MeshWorld = Mesh->GetComponentTransform();
+
+	for (FSpiderLegRuntime& Leg : Legs)
+	{
+		Leg.bInStance = true;
+		Leg.bStepping = false;
+		Leg.StepAlpha = 0.0f;
+
+		const bool bHasFootSocket = !Leg.FootSocketName.IsNone() && Mesh->DoesSocketExist(Leg.FootSocketName);
+		const FName FootName = bHasFootSocket ? Leg.FootSocketName : Leg.EndBoneName;
+
+		// Current pose locations (world)
+		const FVector FootWorld = Mesh->GetSocketLocation(FootName);
+		const FVector TipWorld  = Mesh->GetSocketLocation(Leg.EndBoneName);
+
+		// Convert both to mesh component space
+		const FVector FootCS = MeshWorld.InverseTransformPosition(FootWorld);
+		const FVector TipCS  = MeshWorld.InverseTransformPosition(TipWorld);
+
+		// Cache offsets
+		Leg.RestOffset_Component = FootCS;            // rest FOOT (socket) position in component space
+		Leg.FootToTip_Component  = TipCS - FootCS;    // vector from foot socket to tarsus tip, in component space
+
+		// Start planted at current pose (foot contact)
+		Leg.PlantedWorld = FootWorld;
+
+		// IMPORTANT: IK target must be the TIP target (tarsus), not the foot target
+		const FVector TipTargetWorld = MeshWorld.TransformPosition(FootCS + Leg.FootToTip_Component);
+		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTargetWorld);
+	}
+
+	bInitializedFromPose = true;
+}
+
+void UProceduralSpiderGaitComponent::InitializeDefaultsIfEmpty()
+{
+	if (Legs.Num() != 8)
+	{
+		Legs.Empty();
+		Legs.SetNum(8);
+
+		Legs[0].LegId = ESpiderLeg::L1; Legs[0].IKBoneName = TEXT("Leg1_IKtarsus_L"); Legs[0].EndBoneName = TEXT("Leg1_tarsus_L"); Legs[0].FootSocketName = TEXT("L1_FootSocket");
+		Legs[1].LegId = ESpiderLeg::L2; Legs[1].IKBoneName = TEXT("Leg2_IKtarsus_L"); Legs[1].EndBoneName = TEXT("Leg2_tarsus_L"); Legs[1].FootSocketName = TEXT("L2_FootSocket");
+		Legs[2].LegId = ESpiderLeg::L3; Legs[2].IKBoneName = TEXT("Leg3_IKtarsus_L"); Legs[2].EndBoneName = TEXT("Leg3_tarsus_L"); Legs[2].FootSocketName = TEXT("L3_FootSocket");
+		Legs[3].LegId = ESpiderLeg::L4; Legs[3].IKBoneName = TEXT("Leg4_IKtarsus_L"); Legs[3].EndBoneName = TEXT("Leg4_tarsus_L"); Legs[3].FootSocketName = TEXT("L4_FootSocket");
+
+		Legs[4].LegId = ESpiderLeg::R1; Legs[4].IKBoneName = TEXT("Leg1_IKtarsus_R"); Legs[4].EndBoneName = TEXT("Leg1_tarsus_R"); Legs[4].FootSocketName = TEXT("R1_FootSocket");
+		Legs[5].LegId = ESpiderLeg::R2; Legs[5].IKBoneName = TEXT("Leg2_IKtarsus_R"); Legs[5].EndBoneName = TEXT("Leg2_tarsus_R"); Legs[5].FootSocketName = TEXT("R2_FootSocket");
+		Legs[6].LegId = ESpiderLeg::R3; Legs[6].IKBoneName = TEXT("Leg3_IKtarsus_R"); Legs[6].EndBoneName = TEXT("Leg3_tarsus_R"); Legs[6].FootSocketName = TEXT("R3_FootSocket");
+		Legs[7].LegId = ESpiderLeg::R4; Legs[7].IKBoneName = TEXT("Leg4_IKtarsus_R"); Legs[7].EndBoneName = TEXT("Leg4_tarsus_R"); Legs[7].FootSocketName = TEXT("R4_FootSocket");
+	}
+}
+void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
+{
+	AccumTime += DeltaTime;
+
+	const float Speed = FMath::Max(CommandedSpeed, 0.0f);
+
+	if (Speed < 1.0f)
+	{
+		return;
+	}
+
+	const float StepFrequency = Speed / FMath::Max(1.0f, StepLength);
+	CurrentCycleSeconds = 1.0f / FMath::Max(StepFrequency, 0.01f);
+
+	if (RemainingInGroup > 0)
+	{
+		return;
+	}
+
+	bGroupASwings = !bGroupASwings;
+	RemainingInGroup = 0;
+
+	for (FSpiderLegRuntime& Leg : Legs)
+	{
+		const bool bInActiveGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
+		if (bInActiveGroup)
+		{
+			Leg.bDoneThisGroup = false;
+			RemainingInGroup++;
+		}
+	}
+}
+
+bool UProceduralSpiderGaitComponent::IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const
+{
+	const bool bInActiveGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
+
+	if (!bInActiveGroup)
+	{
+		return false;
+	}
+
+	if (Leg.bDoneThisGroup)
+	{
+		return false;
+	}
+
+	return true;
+}
+
+
+bool UProceduralSpiderGaitComponent::SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const
+{
+	UWorld* World = GetWorld();
+	if (!World) return false;
+
+	const FVector Start = WorldFrom;
+	const FVector End = WorldFrom - FVector(0.0f, 0.0f, TraceDown + TraceUp);
+
+	FHitResult Hit;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(SpiderFootTrace), false, GetOwner());
+
+	const bool bHit = World->LineTraceSingleByChannel(Hit, Start, End, GroundTraceChannel, Params);
+	if (!bHit) return false;
+
+	OutHitPoint = Hit.ImpactPoint;
+	OutHitNormal = Hit.ImpactNormal;
+	return true;
+}
+
+FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const
+{
+	AActor* Owner = GetOwner();
+	if (!Owner) return Leg.PlantedWorld;
+
+	ACharacter* Character = Cast<ACharacter>(Owner);
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!Mesh) return Leg.PlantedWorld;
+
+	const FTransform MeshWorld = Mesh->GetComponentTransform();
+
+	// Reconstruct rest foot position from the stored component-space offset.
+	FVector GuessWorld = MeshWorld.TransformPosition(Leg.RestOffset_Component);
+
+	const FVector Vel = Owner->GetVelocity();
+	FVector MoveDir = FVector(Vel.X, Vel.Y, 0.0f).GetSafeNormal();
+
+	if (!MoveDir.IsNearlyZero())
+	{
+		GuessWorld += MoveDir * StepLength;
+	}
+
+	FVector HitP, HitN;
+	if (SampleGround(GuessWorld + FVector(0.0f, 0.0f, TraceUp), HitP, HitN))
+	{
+		const float SnapLimit = (Leg.MaxSnapToGround > 0.0f) ? Leg.MaxSnapToGround : MaxSnapToGround;
+		if (FVector::Dist(HitP, GuessWorld) <= SnapLimit)
+		{
+			return HitP;
+		}
+	}
+
+	return GuessWorld;
+}
+
+void UProceduralSpiderGaitComponent::BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld)
+{
+	Leg.bStepping = true;
+	Leg.bInStance = false;
+	Leg.StepAlpha = 0.0f;
+	Leg.StepStartWorld = Leg.PlantedWorld;
+	Leg.StepEndWorld = NewEndWorld;
+}
+
+void UProceduralSpiderGaitComponent::TickStep(
+	FSpiderLegRuntime& Leg,
+	float DeltaTime,
+	float SwingDuration)
+{
+	Leg.StepAlpha += DeltaTime / SwingDuration;
+	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha, 0.f, 1.f);
+
+	const float A = Leg.StepAlpha;
+
+	const FVector Flat =
+		FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
+
+	const float Lift =
+		FMath::Sin(A * PI) * StepHeight;
+
+	const FVector FootPos =
+		Flat + FVector(0,0,Lift);
+
+	AActor* Owner = GetOwner();
+	if (!Owner) return;
+
+	ACharacter* Character = Cast<ACharacter>(Owner);
+
+	USkeletalMeshComponent* Mesh =
+		Character ? Character->GetMesh() :
+		Owner->FindComponentByClass<USkeletalMeshComponent>();
+
+	if (!Mesh) return;
+
+	const FTransform MeshWorld = Mesh->GetComponentTransform();
+
+	const FVector TipPos =
+		FootPos +
+		MeshWorld.TransformVector(Leg.FootToTip_Component);
+
+	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPos);
+
+	if (Leg.StepAlpha >= 1.f)
+	{
+		Leg.bStepping = false;
+		Leg.bInStance = true;
+		Leg.bDoneThisGroup = true;
+
+		Leg.PlantedWorld = Leg.StepEndWorld;
+
+		const FVector TipPlanted =
+			Leg.PlantedWorld +
+			MeshWorld.TransformVector(Leg.FootToTip_Component);
+
+		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPlanted);
+
+		RemainingInGroup = FMath::Max(0, RemainingInGroup - 1);
+	}
+}
+
+void UProceduralSpiderGaitComponent::UpdateLeg(
+	FSpiderLegRuntime& Leg,
+	float DeltaTime,
+	float)
+{
+	AActor* Owner = GetOwner();
+	if (!Owner) return;
+
+	ACharacter* Character = Cast<ACharacter>(Owner);
+	USkeletalMeshComponent* Mesh =
+		Character ? Character->GetMesh() :
+		Owner->FindComponentByClass<USkeletalMeshComponent>();
+
+	if (!Mesh) return;
+
+	const FTransform MeshWorld = Mesh->GetComponentTransform();
+
+	// Desired foot contact point in world
+	Leg.DesiredWorld = ComputeDesiredFootPoint(Leg);
+
+	// If currently stepping, continue the step
+	if (Leg.bStepping)
+	{
+		const float SwingDuration =
+			CurrentCycleSeconds *
+			FMath::Clamp(1.f - DutyFactor, 0.05f, 0.45f);
+
+		TickStep(Leg, DeltaTime, SwingDuration);
+		return;
+	}
+
+	// Otherwise keep the foot planted, but drive the tarsus tip target
+	const FVector TipTarget =
+		Leg.PlantedWorld +
+		MeshWorld.TransformVector(Leg.FootToTip_Component);
+
+	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTarget);
+
+	if (bDrawFootTargets)
+	{
+		DrawDebugSphere(GetWorld(), Leg.PlantedWorld, 40.0f, 12, FColor::Red, false, 0.0f);
+		DrawDebugSphere(GetWorld(), Leg.DesiredWorld, 40.0f, 12, FColor::Green, false, 0.0f);
+		DrawDebugSphere(GetWorld(), TipTarget, 40.0f, 12, FColor::Cyan, false, 0.0f);
+	}
+
+	// No commanded motion -> do not start a new step
+	if (CommandedSpeed < 1.0f)
+	{
+		return;
+	}
+
+	// Wrong group -> cannot start
+	const bool bCorrectGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
+	if (!bCorrectGroup)
+	{
+		return;
+	}
+
+	// Already finished this group -> wait for group swap
+	if (Leg.bDoneThisGroup)
+	{
+		return;
+	}
+
+	// Start a step if far enough from desired position
+	const float Dist = FVector::Dist2D(Leg.PlantedWorld, Leg.DesiredWorld);
+	if (Dist > StepTriggerDistance)
+	{
+		BeginStep(Leg, Leg.DesiredWorld);
+	}
+}
+
+bool UProceduralSpiderGaitComponent::IsLegInGroupA(ESpiderLeg LegId) const
+{
+	// GroupA: L1 L3 R2 R4
+	return (LegId == ESpiderLeg::L1) || (LegId == ESpiderLeg::L3) || (LegId == ESpiderLeg::R2) || (LegId == ESpiderLeg::R4);
+}
+
+bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const
+{
+	if (!bInitializedFromPose)
+	{
+		return false;
+	}
+
+	for (const FSpiderLegRuntime& L : Legs)
+	{
+		if (L.LegId == Leg)
+		{
+			OutWorldTarget = L.IKTargetWorld;
+			return true;
+		}
+	}
+	return false;
+}
+
+
+================================================================================
+
+// FILE: ProceduralSpiderGaitComponent.h  |  SHA1(utf8): aacde787a883
+// ProceduralSpiderGaitComponent.h
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Components/ActorComponent.h"
+#include "SpiderGaitTypes.h"
+#include "ProceduralSpiderGaitComponent.generated.h"
+
+UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+class ADVANCEDGAMEPLAY_API UProceduralSpiderGaitComponent : public UActorComponent
+{
+	GENERATED_BODY()
+
+public:
+	UProceduralSpiderGaitComponent();
+
+	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const;
+
+public:
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float DutyFactor = 0.68f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float CycleSeconds = 1.6f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepTriggerDistance = 10.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepReachForward = 12.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float TraceUp = 30.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float TraceDown = 80.0f;
+
+	// Only snap a foot to the ground if the hit is within this distance of the current desired point.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float MaxSnapToGround = 150.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_WorldStatic;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rig")
+	TArray<FSpiderLegRuntime> Legs;
+
+	// Debug: draw target spheres.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+	bool bDrawFootTargets = false;
+	
+	bool IsInitialized() const { return bInitializedFromPose; }
+	
+	// Controller drives this (units/sec)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float CommandedSpeed = 0.f;
+
+	// Fixed ground distance per step
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength = 200.f;
+
+	// Derived cycle duration
+	float CurrentCycleSeconds = 1.f;
+
+	// active stepping group
+	bool bGroupASwings = true;
+
+	// number of legs that still must land in current group
+	int32 RemainingInGroup = 0;
+	
+
+
+private:
+	bool bInitializedFromPose = false;
+	FTimerHandle InitTimerHandle;
+
+	void InitializeFromCurrentPose();
+	float AccumTime = 0.0f;
+	int32 PrevHalf = -1;
+
+private:
+	void InitializeDefaultsIfEmpty();
+	void UpdateCycle(float DeltaTime);
+	void UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float Cycle01);
+
+	bool IsLegInGroupA(ESpiderLeg LegId) const;
+	bool IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const;
+
+	bool SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const;
+	FVector ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const;
+
+	void BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld);
+	void TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration);
+};
+
+================================================================================
+
+// FILE: SpiderAnimInstance.cpp  |  SHA1(utf8): 5b451b7fef5d
+#include "SpiderAnimInstance.h"
+#include "ProceduralSpiderGaitComponent.h"
+#include "GameFramework/Pawn.h"
+
+void USpiderAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
+{
+	Super::NativeUpdateAnimation(DeltaSeconds);
+
+	APawn* Pawn = TryGetPawnOwner();
+	if (!Pawn) return;
+
+	SpiderGait = Pawn->FindComponentByClass<UProceduralSpiderGaitComponent>();
+	if (!SpiderGait) return;
+
+	USkeletalMeshComponent* SkelComp = GetSkelMeshComponent();
+	if (!SkelComp) return;
+
+	// IMPORTANT: don't "create validity" by SetNum every tick
+	if (IKTargets.Num() != 8)
+	{
+		IKTargets.SetNum(8);
+		bTargetsValid = false;
+	}
+
+	const FTransform ComponentWorld = SkelComp->GetComponentTransform();
+
+	bool bGotAtLeastOne = false;
+
+	for (int32 i = 0; i < 8; ++i)
+	{
+		const ESpiderLeg Leg = static_cast<ESpiderLeg>(i);
+
+		FTransform TargetWorld;
+		if (SpiderGait->GetIKTarget(Leg, TargetWorld))
+		{
+			IKTargets[i] = TargetWorld.GetRelativeTransform(ComponentWorld);
+			bGotAtLeastOne = true;
+		}
+	}
+
+	if (bGotAtLeastOne)
+	{
+		bTargetsValid = true;
+	}
+}
+
+void USpiderAnimInstance::NativeInitializeAnimation()
+{
+	Super::NativeInitializeAnimation();
+
+	IKTargets.SetNum(8);
+	bTargetsValid = false;
+}
+
+bool USpiderAnimInstance::GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const
+{
+	if (!bTargetsValid)
+	{
+		return false;
+	}
+
+	const int32 Index = static_cast<int32>(Leg);
+	if (!IKTargets.IsValidIndex(Index))
+	{
+		return false;
+	}
+
+	OutWorldTarget = IKTargets[Index];
+	return true;
+}
+
+================================================================================
+
+// FILE: SpiderAnimInstance.h  |  SHA1(utf8): af8afba3ceb3
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Animation/AnimInstance.h"
+#include "SpiderGaitTypes.h"
+#include "SpiderAnimInstance.generated.h"
+
+class UProceduralSpiderGaitComponent;
+
+UCLASS()
+class ADVANCEDGAMEPLAY_API USpiderAnimInstance : public UAnimInstance
+{
+	GENERATED_BODY()
+
+public:
+	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+	
+	virtual void NativeInitializeAnimation() override;
+
+	// Optional: expose a getter instead of a TMap for easier AnimGraph wiring later.
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const;
+	
+	UFUNCTION(BlueprintCallable, BlueprintPure)
+	bool HasValidTargets() const { return bTargetsValid; }
+	
+	UPROPERTY(Transient, BlueprintReadOnly, Category="Spider|IK")
+	bool bTargetsValid = false;// size 8, index = (int)ESpiderLeg
+
+protected:
+	UPROPERTY(Transient, BlueprintReadOnly)
+	TObjectPtr<UProceduralSpiderGaitComponent> SpiderGait;
+
+	// A TMap is awkward to use in AnimGraph/Blueprint. Works in C++, but pain in BP.
+	UPROPERTY(Transient, BlueprintReadOnly)
+	TArray<FTransform> IKTargets;
+	
+	
+	
+private:
+	
+};
+
+================================================================================
+
+// FILE: SpiderCharacter.cpp  |  SHA1(utf8): a0e369760225
+#include "SpiderCharacter.h"
+#include "ProceduralSpiderGaitComponent.h"
+
+#include "Camera/CameraComponent.h"
+#include "GameFramework/SpringArmComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Components/InputComponent.h"
+
+#include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
+#include "InputAction.h"
+#include "InputMappingContext.h"
+
+#include "GameFramework/PlayerController.h"
+#include "Engine/LocalPlayer.h"
+
+ASpiderCharacter::ASpiderCharacter()
+{
+	PrimaryActorTick.bCanEverTick = true;
+
+	bUseControllerRotationYaw = false;
+	bUseControllerRotationPitch = false;
+	bUseControllerRotationRoll = false;
+
+	GetCharacterMovement()->bOrientRotationToMovement = true;
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
+	GetCharacterMovement()->MaxWalkSpeed = 400.0f;
+
+	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("SpiderGait"));
+}
+
+void ASpiderCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	SpringArm = FindComponentByClass<USpringArmComponent>();
+	Camera = FindComponentByClass<UCameraComponent>();
+
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+
+	PC->SetInputMode(FInputModeGameOnly());
+	PC->bShowMouseCursor = false;
+
+	ULocalPlayer* LocalPlayer = PC->GetLocalPlayer();
+	if (!LocalPlayer)
+	{
+		return;
+	}
+
+	UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
+		LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>();
+
+	if (!InputSubsystem || !DefaultMappingContext)
+	{
+		return;
+	}
+
+	InputSubsystem->ClearAllMappings();
+	InputSubsystem->AddMappingContext(DefaultMappingContext, 0);
+	bInputMappingApplied = true;
+}
+
+void ASpiderCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	if (SpiderGait)
+	{
+		const FVector Velocity = GetVelocity();
+		const float Speed2D = FVector(Velocity.X, Velocity.Y, 0.0f).Size();
+		SpiderGait->CommandedSpeed = Speed2D;
+	}
+}
+
+void ASpiderCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+
+	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(PlayerInputComponent);
+	if (!EnhancedInput)
+	{
+		return;
+	}
+
+	if (MoveForwardAction)
+	{
+		EnhancedInput->BindAction(MoveForwardAction, ETriggerEvent::Started, this, &ASpiderCharacter::MoveForward);
+		EnhancedInput->BindAction(MoveForwardAction, ETriggerEvent::Triggered, this, &ASpiderCharacter::MoveForward);
+		EnhancedInput->BindAction(MoveForwardAction, ETriggerEvent::Completed, this, &ASpiderCharacter::MoveForward);
+	}
+
+	if (MoveRightAction)
+	{
+		EnhancedInput->BindAction(MoveRightAction, ETriggerEvent::Started, this, &ASpiderCharacter::MoveRight);
+		EnhancedInput->BindAction(MoveRightAction, ETriggerEvent::Triggered, this, &ASpiderCharacter::MoveRight);
+		EnhancedInput->BindAction(MoveRightAction, ETriggerEvent::Completed, this, &ASpiderCharacter::MoveRight);
+	}
+
+	if (LookAction)
+	{
+		EnhancedInput->BindAction(LookAction, ETriggerEvent::Triggered, this, &ASpiderCharacter::Look);
+	}
+}
+
+void ASpiderCharacter::MoveForward(const FInputActionValue& Value)
+{
+	const float MoveValue = Value.Get<float>();
+
+	if (!Controller || FMath::IsNearlyZero(MoveValue))
+	{
+		return;
+	}
+
+	const FRotator ControlRotation = Controller->GetControlRotation();
+	const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
+
+	const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+	AddMovementInput(ForwardDirection, MoveValue);
+}
+
+void ASpiderCharacter::MoveRight(const FInputActionValue& Value)
+{
+	const float MoveValue = Value.Get<float>();
+
+	if (!Controller || FMath::IsNearlyZero(MoveValue))
+	{
+		return;
+	}
+
+	const FRotator ControlRotation = Controller->GetControlRotation();
+	const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
+
+	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+	AddMovementInput(RightDirection, MoveValue);
+}
+
+void ASpiderCharacter::Look(const FInputActionValue& Value)
+{
+	const FVector2D LookValue = Value.Get<FVector2D>();
+
+	AddControllerYawInput(LookValue.X);
+	AddControllerPitchInput(LookValue.Y);
+}
+
+================================================================================
+
+// FILE: SpiderCharacter.h  |  SHA1(utf8): 978d56c33b1e
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Character.h"
+#include "InputActionValue.h"
+#include "SpiderCharacter.generated.h"
+
+class UProceduralSpiderGaitComponent;
+class USpringArmComponent;
+class UCameraComponent;
+class UInputMappingContext;
+class UInputAction;
+
+UCLASS()
+class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
+{
+	GENERATED_BODY()
+
+public:
+	ASpiderCharacter();
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaTime) override;
+	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+
+	void MoveForward(const FInputActionValue& Value);
+	void MoveRight(const FInputActionValue& Value);
+	void Look(const FInputActionValue& Value);
+
+public:
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Spider")
+	TObjectPtr<UProceduralSpiderGaitComponent> SpiderGait;
+
+	UPROPERTY(BlueprintReadOnly, Category="Camera")
+	TObjectPtr<USpringArmComponent> SpringArm = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category="Camera")
+	TObjectPtr<UCameraComponent> Camera = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Input")
+	TObjectPtr<UInputMappingContext> DefaultMappingContext;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Input")
+	TObjectPtr<UInputAction> MoveForwardAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Input")
+	TObjectPtr<UInputAction> MoveRightAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Input")
+	TObjectPtr<UInputAction> LookAction;
+
+private:
+	bool bInputMappingApplied = false;
+};
+
+================================================================================
+
+// FILE: SpiderGaitTypes.h  |  SHA1(utf8): 44cc3986604a
+// SpiderGaitTypes.h
+#pragma once
+
+#include "CoreMinimal.h"
+#include "SpiderGaitTypes.generated.h"
+
+UENUM(BlueprintType)
+enum class ESpiderLeg : uint8
+{
+	L1, L2, L3, L4,
+	R1, R2, R3, R4
+};
+
+// SpiderGaitTypes.h
+
+USTRUCT(BlueprintType)
+struct FSpiderLegRuntime
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	ESpiderLeg LegId = ESpiderLeg::L1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName IKBoneName;
+
+	// This is still the IK chain tip (bone), used by FABRIK "Tip Bone"
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName EndBoneName;
+
+	// NEW: this is the actual foot contact point you create in Skeleton as a Socket
+	// e.g. "L1_FootSocket"
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName FootSocketName;
+
+	// (Optional) allow per-leg snap distance
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float MaxSnapToGround = 60.0f;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bInStance = true;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bStepping = false;
+
+	UPROPERTY(BlueprintReadOnly)
+	float PhaseOffset = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector PlantedWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector DesiredWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FTransform IKTargetWorld = FTransform::Identity;
+
+	UPROPERTY(BlueprintReadOnly)
+	float StepAlpha = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector StepStartWorld = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector StepEndWorld = FVector::ZeroVector;
+
+	// Stored in MESH COMPONENT SPACE (not actor space)
+	UPROPERTY(BlueprintReadOnly)
+	FVector RestOffset_Component = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	FVector FootToTip_Component = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	bool bDoneThisGroup = false;
+};

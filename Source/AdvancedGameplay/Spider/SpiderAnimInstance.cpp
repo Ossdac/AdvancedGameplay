@@ -4,32 +4,61 @@
 
 void USpiderAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 {
+	Super::NativeUpdateAnimation(DeltaSeconds);
+
 	APawn* Pawn = TryGetPawnOwner();
 	if (!Pawn) return;
 
 	SpiderGait = Pawn->FindComponentByClass<UProceduralSpiderGaitComponent>();
 	if (!SpiderGait) return;
 
-	IKTargets.SetNum(8);
-	
 	USkeletalMeshComponent* SkelComp = GetSkelMeshComponent();
-	
-	for (int i = 0; i < 8; ++i)
+	if (!SkelComp) return;
+
+	// IMPORTANT: don't "create validity" by SetNum every tick
+	if (IKTargets.Num() != 8)
 	{
-		ESpiderLeg Leg = static_cast<ESpiderLeg>(i);
-		FTransform Target;
-		if (SpiderGait->GetIKTarget(Leg, Target))
+		IKTargets.SetNum(8);
+		bTargetsValid = false;
+	}
+
+	const FTransform ComponentWorld = SkelComp->GetComponentTransform();
+
+	bool bGotAtLeastOne = false;
+
+	for (int32 i = 0; i < 8; ++i)
+	{
+		const ESpiderLeg Leg = static_cast<ESpiderLeg>(i);
+
+		FTransform TargetWorld;
+		if (SpiderGait->GetIKTarget(Leg, TargetWorld))
 		{
-			if (SkelComp)
-			{
-				IKTargets[i] = Target.GetRelativeTransform(SkelComp->GetComponentTransform());
-			}
+			IKTargets[i] = TargetWorld.GetRelativeTransform(ComponentWorld);
+			bGotAtLeastOne = true;
 		}
 	}
+
+	if (bGotAtLeastOne)
+	{
+		bTargetsValid = true;
+	}
+}
+
+void USpiderAnimInstance::NativeInitializeAnimation()
+{
+	Super::NativeInitializeAnimation();
+
+	IKTargets.SetNum(8);
+	bTargetsValid = false;
 }
 
 bool USpiderAnimInstance::GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const
 {
+	if (!bTargetsValid)
+	{
+		return false;
+	}
+
 	const int32 Index = static_cast<int32>(Leg);
 	if (!IKTargets.IsValidIndex(Index))
 	{

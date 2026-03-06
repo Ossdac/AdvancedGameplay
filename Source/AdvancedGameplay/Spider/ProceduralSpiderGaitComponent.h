@@ -1,3 +1,5 @@
+// ProceduralSpiderGaitComponent.h
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -16,18 +18,15 @@ public:
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
-	// Read by AnimInstance
 	UFUNCTION(BlueprintCallable, BlueprintPure)
 	bool GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const;
 
 public:
-	// --- Gait tuning (based on paper ranges) ---
-	// Duty factor > 0.6 means long stance time.
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float DutyFactor = 0.68f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float CycleSeconds = 1.6f; // typical gait cycle ~1.55–1.77s in the referenced study
+	float CycleSeconds = 1.6f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float StepHeight = 6.0f;
@@ -44,24 +43,48 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float TraceDown = 80.0f;
 
+	// Only snap a foot to the ground if the hit is within this distance of the current desired point.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float MaxSnapToGround = 150.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	TEnumAsByte<ECollisionChannel> GroundTraceChannel = ECC_WorldStatic;
 
-	// 8 legs
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Rig")
 	TArray<FSpiderLegRuntime> Legs;
+
+	// Debug: draw target spheres.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Debug")
+	bool bDrawFootTargets = false;
 	
+	bool IsInitialized() const { return bInitializedFromPose; }
+	
+	// Controller drives this (units/sec)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float MaxSnapToGround = 5.0f;
+	float CommandedSpeed = 0.f;
+
+	// Fixed ground distance per step
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength = 200.f;
+
+	// Derived cycle duration
+	float CurrentCycleSeconds = 1.f;
+
+	// active stepping group
+	bool bGroupASwings = true;
+
+	// number of legs that still must land in current group
+	int32 RemainingInGroup = 0;
+	
+
 
 private:
-	float AccumTime = 0.0f;
-	
-	int32 PrevHalf = -1;
-	
+	bool bInitializedFromPose = false;
+	FTimerHandle InitTimerHandle;
 
-	// group toggle each half-cycle
-	bool bGroupASwings = true;
+	void InitializeFromCurrentPose();
+	float AccumTime = 0.0f;
+	int32 PrevHalf = -1;
 
 private:
 	void InitializeDefaultsIfEmpty();

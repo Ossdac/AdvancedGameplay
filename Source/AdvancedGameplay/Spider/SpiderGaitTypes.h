@@ -11,6 +11,8 @@ enum class ESpiderLeg : uint8
 	R1, R2, R3, R4
 };
 
+// SpiderGaitTypes.h
+
 USTRUCT(BlueprintType)
 struct FSpiderLegRuntime
 {
@@ -20,10 +22,20 @@ struct FSpiderLegRuntime
 	ESpiderLeg LegId = ESpiderLeg::L1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName IKBoneName;          // e.g. Leg1_IKtarsus_L
+	FName IKBoneName;
 
+	// This is still the IK chain tip (bone), used by FABRIK "Tip Bone"
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	FName EndBoneName;         // e.g. Leg1_tarsus_L
+	FName EndBoneName;
+
+	// NEW: this is the actual foot contact point you create in Skeleton as a Socket
+	// e.g. "L1_FootSocket"
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FName FootSocketName;
+
+	// (Optional) allow per-leg snap distance
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float MaxSnapToGround = 60.0f;
 
 	UPROPERTY(BlueprintReadOnly)
 	bool bInStance = true;
@@ -32,7 +44,7 @@ struct FSpiderLegRuntime
 	bool bStepping = false;
 
 	UPROPERTY(BlueprintReadOnly)
-	float PhaseOffset = 0.0f;  // per-leg offset within cycle
+	float PhaseOffset = 0.0f;
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector PlantedWorld = FVector::ZeroVector;
@@ -43,7 +55,6 @@ struct FSpiderLegRuntime
 	UPROPERTY(BlueprintReadOnly)
 	FTransform IKTargetWorld = FTransform::Identity;
 
-	// Swing interpolation
 	UPROPERTY(BlueprintReadOnly)
 	float StepAlpha = 0.0f;
 
@@ -52,8 +63,14 @@ struct FSpiderLegRuntime
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector StepEndWorld = FVector::ZeroVector;
-	
+
+	// Stored in MESH COMPONENT SPACE (not actor space)
 	UPROPERTY(BlueprintReadOnly)
 	FVector RestOffset_Component = FVector::ZeroVector;
 	
+	UPROPERTY(BlueprintReadOnly)
+	FVector FootToTip_Component = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	bool bDoneThisGroup = false;
 };

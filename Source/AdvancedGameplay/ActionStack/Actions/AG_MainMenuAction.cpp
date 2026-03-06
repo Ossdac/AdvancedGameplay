@@ -11,10 +11,10 @@ void UAG_MainMenuAction::OnBegin(bool bFirstTime)
 
 	if (GEngine)
 	{
-		GEngine->AddOnScreenDebugMessage(
-			-1, 5.0f, FColor::Cyan,
-			TitleText + ": OnBegin"
-		);
+		// GEngine->AddOnScreenDebugMessage(
+		// 	-1, 5.0f, FColor::Cyan,
+		// 	TitleText + ": OnBegin"
+		// );
 	}
 }
 
