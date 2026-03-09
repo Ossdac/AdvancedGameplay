@@ -26,16 +26,31 @@ public:
 	float DutyFactor = 0.68f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float CycleSeconds = 1.6f;
+	float StepLength1 = 600.0f; // front legs: L1 / R1
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float StepHeight = 6.0f;
+	float StepLength2 = 750.0f; // second row: L2 / R2
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength3 = 900.0f; // third row: L3 / R3
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength4 = 800.0f; // rear row: L4 / R4
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight1 = 35.0f; // front legs
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight2 = 45.0f; // second row
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight3 = 50.0f; // third row
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight4 = 40.0f; // rear row
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float StepTriggerDistance = 10.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float StepReachForward = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float TraceUp = 30.0f;
@@ -63,9 +78,7 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float CommandedSpeed = 0.f;
 
-	// Fixed ground distance per step
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float StepLength = 200.f;
+	
 
 	// Derived cycle duration
 	float CurrentCycleSeconds = 1.f;
@@ -83,20 +96,20 @@ private:
 	FTimerHandle InitTimerHandle;
 
 	void InitializeFromCurrentPose();
-	float AccumTime = 0.0f;
-	int32 PrevHalf = -1;
-
+	
 private:
 	void InitializeDefaultsIfEmpty();
 	void UpdateCycle(float DeltaTime);
 	void UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float Cycle01);
 
 	bool IsLegInGroupA(ESpiderLeg LegId) const;
-	bool IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const;
 
 	bool SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const;
 	FVector ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const;
 
 	void BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld);
 	void TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration);
+	
+	float GetStepLengthForLeg(ESpiderLeg LegId) const;
+	float GetStepHeightForLeg(ESpiderLeg LegId) const;
 };

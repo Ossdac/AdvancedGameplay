@@ -5,8 +5,10 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Components/InputComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
+#include "AdvancedGameplay/Physics/AG_RigidbodyComponent.h"
 
 ASpiderCharacter::ASpiderCharacter()
 {
@@ -17,8 +19,8 @@ ASpiderCharacter::ASpiderCharacter()
 	bUseControllerRotationRoll = false;
 
 	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 360.0f, 0.0f);
-	GetCharacterMovement()->MaxWalkSpeed = 400.0f;
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, RotationRateDegrees, 0.0f);
+	GetCharacterMovement()->MaxWalkSpeed = MaxWalkSpeed;
 
 	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("SpiderGait"));
 }
@@ -35,6 +37,13 @@ void ASpiderCharacter::BeginPlay()
 	{
 		PlayerController->SetInputMode(FInputModeGameOnly());
 		PlayerController->bShowMouseCursor = false;
+	}
+
+	UCapsuleComponent* Capsule = GetCapsuleComponent();
+	if (Capsule)
+	{
+		Capsule->SetNotifyRigidBodyCollision(true);
+		Capsule->OnComponentHit.AddDynamic(this, &ASpiderCharacter::OnSpiderHit);
 	}
 }
 
@@ -66,23 +75,10 @@ void ASpiderCharacter::HandleRawMovement()
 	}
 
 	float ForwardValue = 0.0f;
-	float RightValue = 0.0f;
 
 	if (PlayerController->IsInputKeyDown(EKeys::W))
 	{
 		ForwardValue += 1.0f;
-	}
-	if (PlayerController->IsInputKeyDown(EKeys::S))
-	{
-		ForwardValue -= 1.0f;
-	}
-	if (PlayerController->IsInputKeyDown(EKeys::D))
-	{
-		RightValue += 1.0f;
-	}
-	if (PlayerController->IsInputKeyDown(EKeys::A))
-	{
-		RightValue -= 1.0f;
 	}
 
 	if (!FMath::IsNearlyZero(ForwardValue))
@@ -91,14 +87,6 @@ void ASpiderCharacter::HandleRawMovement()
 		const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
 		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 		AddMovementInput(ForwardDirection, ForwardValue);
-	}
-
-	if (!FMath::IsNearlyZero(RightValue))
-	{
-		const FRotator ControlRotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
-		const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
-		AddMovementInput(RightDirection, RightValue);
 	}
 
 	float MouseX = 0.0f;
@@ -114,4 +102,32 @@ void ASpiderCharacter::HandleRawMovement()
 	{
 		AddControllerPitchInput(-MouseY);
 	}
+}
+
+void ASpiderCharacter::OnSpiderHit(
+	UPrimitiveComponent* HitComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComp,
+	FVector NormalImpulse,
+	const FHitResult& Hit)
+{
+	if (!OtherActor || OtherActor == this)
+	{
+		return;
+	}
+
+	UAG_RigidbodyComponent* OtherBody = OtherActor->FindComponentByClass<UAG_RigidbodyComponent>();
+	if (!OtherBody)
+	{
+		return;
+	}
+
+	FVector PushDirection = GetVelocity().GetSafeNormal();
+
+	if (PushDirection.IsNearlyZero())
+	{
+		PushDirection = GetActorForwardVector();
+	}
+
+	OtherBody->AddForce(PushDirection * PushForce);
 }

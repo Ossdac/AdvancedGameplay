@@ -46,168 +46,244 @@ public:
 
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\Actions\AG_MainMenuAction.cpp  |  SHA1(utf8): 6077d550914d
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_MainMenuAction.cpp  |  SHA1(utf8): d67f7ca112f6
 #include "AG_MainMenuAction.h"
 
 #include "AG_PlayAction.h"
 #include "AdvancedGameplay/AG_GameInstance.h"
 #include "Engine/Engine.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/KismetSystemLibrary.h"
 
 void UAG_MainMenuAction::OnBegin(bool bFirstTime)
 {
-	bDone = false;
+	bQuitRequested = false;
 
-	if (GEngine)
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		// GEngine->AddOnScreenDebugMessage(
-		// 	-1, 5.0f, FColor::Cyan,
-		// 	TitleText + ": OnBegin"
-		// );
+		return;
 	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	PC->SetIgnoreMoveInput(true);
+	PC->SetIgnoreLookInput(true);
 }
 
 void UAG_MainMenuAction::OnUpdate()
 {
 	UWorld* World = GetWorld();
-	if (!World) { return; }
-
-	APlayerController* PC = World->GetFirstPlayerController();
-	if (!PC) { return; }
-
-	// if (GEngine)
-	// {
-	// 	GEngine->AddOnScreenDebugMessage(
-	// 		-1, .01f, FColor::Cyan,
-	// 		TitleText
-	// 	);
-	// }
-
-	if (PC->WasInputKeyJustPressed(EKeys::Enter))
+	if (!World)
 	{
-		StartGame();
+		return;
 	}
 
-	if (PC->WasInputKeyJustPressed(EKeys::Escape))
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
 	{
-		RequestExit();
+		return;
+	}
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			1001,
+			0.0f,
+			FColor::Cyan,
+			TEXT("MAIN MENU")
+		);
+
+		GEngine->AddOnScreenDebugMessage(
+			1002,
+			0.0f,
+			FColor::Cyan,
+			TEXT("Press P to Play")
+		);
+
+		GEngine->AddOnScreenDebugMessage(
+			1003,
+			0.0f,
+			FColor::Cyan,
+			TEXT("Press Q to Quit")
+		);
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::P))
+	{
+		StartGame();
+		return;
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::Q))
+	{
+		RequestQuit();
 	}
 }
 
 void UAG_MainMenuAction::OnEnd()
 {
-	if (bDone)
+	if (!bQuitRequested)
 	{
-		UWorld* World = GetWorld();
-		if (World)
-		{
-			APlayerController* PC = World->GetFirstPlayerController();
-			UKismetSystemLibrary::QuitGame(World, PC, EQuitPreference::Quit, false);
-		}
+		return;
 	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	UKismetSystemLibrary::QuitGame(World, PC, EQuitPreference::Quit, false);
 }
 
 bool UAG_MainMenuAction::IsDone() const
 {
-	// Only true when the player has explicitly requested exit.
-	return bDone;
+	return bQuitRequested;
 }
 
 void UAG_MainMenuAction::StartGame()
 {
 	UWorld* World = GetWorld();
-	if (!World) { return; }
+	if (!World)
+	{
+		return;
+	}
 
 	UAG_GameInstance* GI = Cast<UAG_GameInstance>(World->GetGameInstance());
-	if (!GI) { return; }
+	if (!GI)
+	{
+		return;
+	}
 
 	UAG_PlayAction* PlayAction = NewObject<UAG_PlayAction>(GI);
 	GI->GetActionStack().PushAction(PlayAction);
 }
 
-void UAG_MainMenuAction::RequestExit()
+void UAG_MainMenuAction::RequestQuit()
 {
-	bDone = true;
+	bQuitRequested = true;
 }
-
 
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\Actions\AG_MainMenuAction.h  |  SHA1(utf8): a603557b598b
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_MainMenuAction.h  |  SHA1(utf8): 543de468412e
 #pragma once
 
 #include "CoreMinimal.h"
 #include "AG_ActionBase.h"
-#include "UObject/Object.h"
 #include "AG_MainMenuAction.generated.h"
 
-/*
- * Main Menu Action that acts as a root of the ActionStack
- */
-
-UCLASS(Blueprintable)
+UCLASS()
 class ADVANCEDGAMEPLAY_API UAG_MainMenuAction : public UAG_ActionBase
 {
 	GENERATED_BODY()
 
 public:
-	// Text to show in the menu
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MainMenu")
-	FString TitleText = TEXT("MAIN MENU - Press Enter to Start");
-
-	// IAction interface
 	virtual void OnBegin(bool bFirstTime) override;
 	virtual void OnUpdate() override;
 	virtual void OnEnd() override;
 	virtual bool IsDone() const override;
 
 private:
-	// Only true when Exiting the game to keep the main menu action as a root
-	bool bDone = false;
+	bool bQuitRequested = false;
 
 	void StartGame();
-	void RequestExit();
+	void RequestQuit();
 };
-
 
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\Actions\AG_PlayAction.cpp  |  SHA1(utf8): cccb4a48a864
-// Fill out your copyright notice in the Description page of Project Settings.
-
-
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_PlayAction.cpp  |  SHA1(utf8): 943115fffb8a
 #include "AG_PlayAction.h"
+
+#include "AG_ResultAction.h"
+#include "AdvancedGameplay/AG_GameInstance.h"
+#include "AdvancedGameplay/Spider/SpiderCharacter.h"
+
+#include "Engine/Engine.h"
+#include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 
 void UAG_PlayAction::OnBegin(bool bFirstTime)
 {
-	if (GEngine)
+	bDone = false;
+	bResultShown = false;
+
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		GEngine->AddOnScreenDebugMessage(
-			-1, 5.f, FColor::Green,
-			"Game Started: OnBegin"
-		);
+		return;
 	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (PC)
+	{
+		PC->SetIgnoreMoveInput(false);
+		PC->SetIgnoreLookInput(false);
+	}
+
+	FindActors();
 }
 
 void UAG_PlayAction::OnUpdate()
 {
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(
-			-1, .1f, FColor::Green,
-			"Holy cow this is fun playing the game!"
+			2001,
+			0.0f,
+			FColor::Green,
+			TEXT("GAME RUNNING")
+		);
+
+		GEngine->AddOnScreenDebugMessage(
+			2002,
+			0.0f,
+			FColor::Green,
+			TEXT("Push the ball off the platform")
 		);
 	}
 
-	UWorld* World = GetWorld();
-	if (!World) { return; }
-
-	APlayerController* PC = World->GetFirstPlayerController();
-	if (!PC) { return; }
-
-	if (PC->WasInputKeyJustPressed(EKeys::BackSpace))
+	if (!BallActor.IsValid() || !SpiderActor.IsValid())
 	{
-		bDone = true; 
+		FindActors();
+		return;
+	}
+
+	if (!bResultShown && BallActor->GetActorLocation().Y <= BallWinY)
+	{
+		ShowResult(TEXT("CONGRATULATIONS"));
+		return;
+	}
+
+	if (!bResultShown && SpiderActor->GetActorLocation().Y <= SpiderLoseY)
+	{
+		ShowResult(TEXT("YOU LOST"));
+		return;
+	}
+
+	// Optional quick escape back to menu.
+	if (PC->WasInputKeyJustPressed(EKeys::Escape))
+	{
+		ShowResult(TEXT("YOU LOST"));
 	}
 }
 
@@ -220,30 +296,199 @@ bool UAG_PlayAction::IsDone() const
 	return bDone;
 }
 
+void UAG_PlayAction::FindActors()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	SpiderActor = Cast<ASpiderCharacter>(
+		UGameplayStatics::GetActorOfClass(World, ASpiderCharacter::StaticClass())
+	);
+
+	TArray<AActor*> BallActors;
+	UGameplayStatics::GetAllActorsWithTag(World, FName(TEXT("Ball")), BallActors);
+
+	if (BallActors.Num() > 0)
+	{
+		BallActor = BallActors[0];
+	}
+}
+
+void UAG_PlayAction::ShowResult(const FString& ResultText)
+{
+	if (bResultShown)
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UAG_GameInstance* GI = Cast<UAG_GameInstance>(World->GetGameInstance());
+	if (!GI)
+	{
+		return;
+	}
+
+	UAG_ResultAction* ResultAction = NewObject<UAG_ResultAction>(GI);
+	ResultAction->ResultText = ResultText;
+
+	bResultShown = true;
+	GI->GetActionStack().PushAction(ResultAction);
+}
 
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\Actions\AG_PlayAction.h  |  SHA1(utf8): 7d26118033d8
-// Fill out your copyright notice in the Description page of Project Settings.
-
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_PlayAction.h  |  SHA1(utf8): b4f0ede5e2ac
 #pragma once
 
 #include "CoreMinimal.h"
 #include "AG_ActionBase.h"
-#include "UObject/Object.h"
 #include "AG_PlayAction.generated.h"
 
-/**
- * 
- */
+class ASpiderCharacter;
+class AActor;
+
 UCLASS()
 class ADVANCEDGAMEPLAY_API UAG_PlayAction : public UAG_ActionBase
 {
 	GENERATED_BODY()
 
 public:
-	
-	// IAction interface
+	virtual void OnBegin(bool bFirstTime) override;
+	virtual void OnUpdate() override;
+	virtual void OnEnd() override;
+	virtual bool IsDone() const override;
+
+private:
+	bool bDone = false;
+	bool bResultShown = false;
+
+	// Change these numbers in code if needed.
+	float BallWinY = -1200.0f;
+	float SpiderLoseY = -1200.0f;
+
+	TWeakObjectPtr<AActor> BallActor;
+	TWeakObjectPtr<ASpiderCharacter> SpiderActor;
+
+	void FindActors();
+	void ShowResult(const FString& ResultText);
+};
+
+================================================================================
+
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_ResultAction.cpp  |  SHA1(utf8): 6813afce7907
+#include "AG_ResultAction.h"
+
+#include "AdvancedGameplay/AG_GameInstance.h"
+#include "Kismet/GameplayStatics.h"
+#include "GameFramework/PlayerController.h"
+#include "Engine/Engine.h"
+
+void UAG_ResultAction::OnBegin(bool bFirstTime)
+{
+	bDone = false;
+
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	PC->SetIgnoreMoveInput(true);
+	PC->SetIgnoreLookInput(true);
+}
+
+void UAG_ResultAction::OnUpdate()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			3001,
+			0.0f,
+			FColor::Yellow,
+			ResultText
+		);
+
+		GEngine->AddOnScreenDebugMessage(
+			3002,
+			0.0f,
+			FColor::Yellow,
+			TEXT("Press Enter to return to menu")
+		);
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::Enter))
+	{
+		bDone = true;
+	}
+}
+
+void UAG_ResultAction::OnEnd()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	UAG_GameInstance* GI = Cast<UAG_GameInstance>(World->GetGameInstance());
+	if (GI)
+	{
+		GI->GetActionStack().PopToRoot();
+	}
+
+	const FString LevelName = UGameplayStatics::GetCurrentLevelName(World, true);
+	UGameplayStatics::OpenLevel(World, FName(*LevelName));
+}
+
+bool UAG_ResultAction::IsDone() const
+{
+	return bDone;
+}
+
+================================================================================
+
+// FILE: AdvancedGameplay\ActionStack\Actions\AG_ResultAction.h  |  SHA1(utf8): bf656257e841
+#pragma once
+
+#include "CoreMinimal.h"
+#include "AG_ActionBase.h"
+#include "AG_ResultAction.generated.h"
+
+UCLASS()
+class ADVANCEDGAMEPLAY_API UAG_ResultAction : public UAG_ActionBase
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY()
+	FString ResultText = TEXT("CONGRATULATIONS");
+
 	virtual void OnBegin(bool bFirstTime) override;
 	virtual void OnUpdate() override;
 	virtual void OnEnd() override;
@@ -253,12 +498,9 @@ private:
 	bool bDone = false;
 };
 
-
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\FActionStack.cpp  |  SHA1(utf8): d5fc5dcf33d1
-// FActionStack.cpp
-
+// FILE: AdvancedGameplay\ActionStack\FActionStack.cpp  |  SHA1(utf8): a2dc8ee764f9
 #include "FActionStack.h"
 
 void FActionStack::PushAction(UAG_ActionBase* Action)
@@ -268,17 +510,30 @@ void FActionStack::PushAction(UAG_ActionBase* Action)
 		return;
 	}
 
-	// Remove any existing instance first
 	Stack.Remove(Action);
-
-	// Add to the back = top of stack
 	Stack.Add(Action);
 
-	// Force a re-begin next Update
 	if (CurrentAction && CurrentAction != Action)
 	{
 		CurrentAction = nullptr;
 	}
+}
+
+void FActionStack::PopToRoot()
+{
+	if (Stack.Num() <= 1)
+	{
+		CurrentAction = nullptr;
+		return;
+	}
+
+	while (Stack.Num() > 1)
+	{
+		UAG_ActionBase* Removed = Stack.Pop();
+		FirstTimeActions.Remove(Removed);
+	}
+
+	CurrentAction = nullptr;
 }
 
 void FActionStack::UpdateActions()
@@ -297,7 +552,6 @@ void FActionStack::UpdateActions()
 		return;
 	}
 
-	// If we don't have a valid current action, pick the top
 	if (!CurrentAction)
 	{
 		CurrentAction = Stack.Last();
@@ -323,11 +577,9 @@ void FActionStack::UpdateActions()
 		return;
 	}
 
-	// OnUpdate may push/pop/change stack
 	UAG_ActionBase* ActionBeforeUpdate = CurrentAction;
 	CurrentAction->OnUpdate();
 
-	// If stack emptied or current is no longer top, reset and return
 	if (Stack.Num() == 0 || Stack.Last() != ActionBeforeUpdate)
 	{
 		CurrentAction = nullptr;
@@ -335,11 +587,10 @@ void FActionStack::UpdateActions()
 		return;
 	}
 
-	// If still top, check IsDone
 	if (CurrentAction->IsDone())
 	{
 		UAG_ActionBase* Finished = CurrentAction;
-		Stack.Pop(); // pop back
+		Stack.Pop();
 		Finished->OnEnd();
 		FirstTimeActions.Remove(Finished);
 		CurrentAction = nullptr;
@@ -348,54 +599,44 @@ void FActionStack::UpdateActions()
 	bIsUpdating = false;
 }
 
-
 ================================================================================
 
-// FILE: AdvancedGameplay\ActionStack\FActionStack.h  |  SHA1(utf8): e2d8a324185a
+// FILE: AdvancedGameplay\ActionStack\FActionStack.h  |  SHA1(utf8): 35e3ab35b4fe
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Actions/AG_ActionBase.h"
 #include "FActionStack.generated.h"
 
-/**
- * Only the action at the top of the stack is active.
- * Actions receive Begin/Update/End callbacks and can push
- * or pop other actions during updates.
- */
 USTRUCT(BlueprintType)
 struct ADVANCEDGAMEPLAY_API FActionStack
 {
 	GENERATED_BODY()
 
 public:
-	// Add an action to the top of the stack
 	void PushAction(UAG_ActionBase* Action);
-
-	// Drive the stack once per frame (call from GameMode::Tick)
 	void UpdateActions();
+
+	// Minimal helper for this assignment:
+	// keep the root action (main menu), remove everything above it.
+	void PopToRoot();
 
 	bool IsEmpty() const { return CurrentAction == nullptr && Stack.Num() == 0; }
 
 	const TArray<TObjectPtr<UAG_ActionBase>>& GetStack() const { return Stack; }
 	UAG_ActionBase* GetCurrentAction() const { return CurrentAction; }
 
-	// Top of stack is at the back
 	UPROPERTY()
 	TArray<TObjectPtr<UAG_ActionBase>> Stack;
 
-	// Current active action (same as Stack.Last() when not null)
 	UPROPERTY()
 	TObjectPtr<UAG_ActionBase> CurrentAction = nullptr;
 
-	// Tracks if we've ever begun a given action
 	UPROPERTY()
 	TSet<TObjectPtr<UAG_ActionBase>> FirstTimeActions;
 
-	// Reentrancy guard
 	bool bIsUpdating = false;
 };
-
 
 ================================================================================
 
@@ -2578,7 +2819,7 @@ private:
 
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\ProceduralSpiderGaitComponent.cpp  |  SHA1(utf8): f16de8aa691e
+// FILE: AdvancedGameplay\Spider\ProceduralSpiderGaitComponent.cpp  |  SHA1(utf8): 2376b0ba06a0
 // ProceduralSpiderGaitComponent.cpp
 
 #include "ProceduralSpiderGaitComponent.h"
@@ -2602,7 +2843,10 @@ void UProceduralSpiderGaitComponent::BeginPlay()
 	}
 }
 
-void UProceduralSpiderGaitComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UProceduralSpiderGaitComponent::TickComponent(
+	float DeltaTime,
+	ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
@@ -2611,15 +2855,11 @@ void UProceduralSpiderGaitComponent::TickComponent(float DeltaTime, ELevelTick T
 		return;
 	}
 
-
 	UpdateCycle(DeltaTime);
-
-	const float SafeCycleSeconds = FMath::Max(0.001f, CycleSeconds);
-	const float Cycle01 = FMath::Fmod(AccumTime / SafeCycleSeconds, 1.0f);
 
 	for (FSpiderLegRuntime& Leg : Legs)
 	{
-		UpdateLeg(Leg, DeltaTime, Cycle01);
+		UpdateLeg(Leg, DeltaTime, 0.f);
 	}
 }
 
@@ -2697,36 +2937,39 @@ void UProceduralSpiderGaitComponent::InitializeDefaultsIfEmpty()
 }
 void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 {
-	AccumTime += DeltaTime;
+	const float Speed = FMath::Max(CommandedSpeed, 0.0f);
 
-	const float SafeCycleSeconds = FMath::Max(0.001f, CycleSeconds);
-	const float Cycle01 = FMath::Fmod(AccumTime / SafeCycleSeconds, 1.0f);
-
-	const int32 Half = (Cycle01 < 0.5f) ? 0 : 1;
-	if (Half != PrevHalf)
+	if (Speed < 1.0f)
 	{
-		PrevHalf = Half;
-		bGroupASwings = (Half == 0);
+		return;
+	}
+
+	// Use row 3 as the default gait basis since it is your main stride row.
+	const float GaitBasisStepLength = FMath::Max(1.0f, StepLength3);
+
+	const float StepFrequency = Speed / GaitBasisStepLength;
+	CurrentCycleSeconds = 1.0f / FMath::Max(StepFrequency, 0.01f);
+
+	if (RemainingInGroup > 0)
+	{
+		return;
+	}
+
+	bGroupASwings = !bGroupASwings;
+	RemainingInGroup = 0;
+
+	for (FSpiderLegRuntime& Leg : Legs)
+	{
+		const bool bInActiveGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
+		if (bInActiveGroup)
+		{
+			Leg.bDoneThisGroup = false;
+			RemainingInGroup++;
+		}
 	}
 }
 
-bool UProceduralSpiderGaitComponent::IsLegInGroupA(ESpiderLeg LegId) const
-{
-	// GroupA: L1 L3 R2 R4
-	return (LegId == ESpiderLeg::L1) || (LegId == ESpiderLeg::L3) || (LegId == ESpiderLeg::R2) || (LegId == ESpiderLeg::R4);
-}
 
-bool UProceduralSpiderGaitComponent::IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const
-{
-	const float SwingFrac = FMath::Clamp(1.0f - DutyFactor, 0.05f, 0.45f);
-
-	const float HalfStart = bGroupASwings ? 0.0f : 0.5f;
-	const float Local = (Cycle01 - HalfStart) * 2.0f;
-	if (Local < 0.0f || Local > 1.0f) return false;
-
-	const bool bInThisGroup = bGroupASwings ? IsLegInGroupA(Leg.LegId) : !IsLegInGroupA(Leg.LegId);
-	return bInThisGroup && (Local <= SwingFrac);
-}
 
 bool UProceduralSpiderGaitComponent::SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const
 {
@@ -2758,19 +3001,18 @@ FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLeg
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
 
-	// Reconstruct rest foot position from the stored component-space offset.
+	// Reconstruct rest foot position from the stored component-space position
 	FVector GuessWorld = MeshWorld.TransformPosition(Leg.RestOffset_Component);
 
-	// Add stride only if moving.
 	const FVector Vel = Owner->GetVelocity();
-	const float Speed2D = FVector(Vel.X, Vel.Y, 0.0f).Size();
+	FVector MoveDir = FVector(Vel.X, Vel.Y, 0.0f).GetSafeNormal();
 
-	if (Speed2D > 2.0f)
+	if (!MoveDir.IsNearlyZero())
 	{
-		GuessWorld += Owner->GetActorForwardVector() * StepReachForward;
+		const float StepLengthForThisLeg = GetStepLengthForLeg(Leg.LegId);
+		GuessWorld += MoveDir * StepLengthForThisLeg;
 	}
 
-	// Optional gentle ground snap.
 	FVector HitP, HitN;
 	if (SampleGround(GuessWorld + FVector(0.0f, 0.0f, TraceUp), HitP, HitN))
 	{
@@ -2793,92 +3035,140 @@ void UProceduralSpiderGaitComponent::BeginStep(FSpiderLegRuntime& Leg, const FVe
 	Leg.StepEndWorld = NewEndWorld;
 }
 
-void UProceduralSpiderGaitComponent::TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration)
+void UProceduralSpiderGaitComponent::TickStep(
+	FSpiderLegRuntime& Leg,
+	float DeltaTime,
+	float SwingDuration)
 {
-	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha + (DeltaTime / FMath::Max(0.001f, SwingDuration)), 0.0f, 1.0f);
+	Leg.StepAlpha += DeltaTime / FMath::Max(0.001f, SwingDuration);
+	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha, 0.f, 1.f);
 
 	const float A = Leg.StepAlpha;
-	const FVector Flat = FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
-	const float Lift = FMath::Sin(A * PI) * StepHeight;
 
-	// This is the desired FOOT contact position (socket), in world
-	const FVector FootPosWorld = Flat + FVector(0.0f, 0.0f, Lift);
+	const FVector Flat =
+		FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
+
+	const float StepHeightForThisLeg = GetStepHeightForLeg(Leg.LegId);
+
+	const float Lift =
+		FMath::Sin(A * PI) * StepHeightForThisLeg;
+
+	const FVector FootPos =
+		Flat + FVector(0, 0, Lift);
 
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
 	ACharacter* Character = Cast<ACharacter>(Owner);
-	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+
+	USkeletalMeshComponent* Mesh =
+		Character ? Character->GetMesh() :
+		Owner->FindComponentByClass<USkeletalMeshComponent>();
+
 	if (!Mesh) return;
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
 
-	// Convert FOOT target -> TIP target (tarsus) using the cached component-space offset
-	const FVector TipPosWorld = FootPosWorld + MeshWorld.TransformVector(Leg.FootToTip_Component);
+	const FVector TipPos =
+		FootPos +
+		MeshWorld.TransformVector(Leg.FootToTip_Component);
 
-	// This is what FABRIK should receive (because its Tip Bone is the tarsus)
-	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPosWorld);
+	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPos);
 
-	if (Leg.StepAlpha >= 1.0f)
+	if (Leg.StepAlpha >= 1.f)
 	{
 		Leg.bStepping = false;
 		Leg.bInStance = true;
+		Leg.bDoneThisGroup = true;
 
-		// Plant the FOOT at the end position (contact point)
 		Leg.PlantedWorld = Leg.StepEndWorld;
 
-		// And keep IK driving the TIP (tarsus) to match that planted foot
-		const FVector TipPlantedWorld = Leg.PlantedWorld + MeshWorld.TransformVector(Leg.FootToTip_Component);
-		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPlantedWorld);
+		const FVector TipPlanted =
+			Leg.PlantedWorld +
+			MeshWorld.TransformVector(Leg.FootToTip_Component);
+
+		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPlanted);
+
+		RemainingInGroup = FMath::Max(0, RemainingInGroup - 1);
 	}
 }
 
-void UProceduralSpiderGaitComponent::UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float Cycle01)
+void UProceduralSpiderGaitComponent::UpdateLeg(
+	FSpiderLegRuntime& Leg,
+	float DeltaTime,
+	float)
 {
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
 
 	ACharacter* Character = Cast<ACharacter>(Owner);
-	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	USkeletalMeshComponent* Mesh =
+		Character ? Character->GetMesh() :
+		Owner->FindComponentByClass<USkeletalMeshComponent>();
+
 	if (!Mesh) return;
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
 
-	const float SwingDuration = CycleSeconds * FMath::Clamp(1.0f - DutyFactor, 0.05f, 0.45f);
-
-	// DesiredWorld is the desired FOOT contact (socket) in world
+	// Desired foot contact point in world
 	Leg.DesiredWorld = ComputeDesiredFootPoint(Leg);
 
+	// If currently stepping, continue the step
 	if (Leg.bStepping)
 	{
+		const float SwingDuration =
+			CurrentCycleSeconds *
+			FMath::Clamp(1.f - DutyFactor, 0.05f, 0.45f);
+
 		TickStep(Leg, DeltaTime, SwingDuration);
 		return;
 	}
 
-	// STANCE: we keep the FOOT planted at Leg.PlantedWorld
-	// but IK must target the TIP (tarsus), so convert foot->tip
-	const FVector TipTargetWorld = Leg.PlantedWorld + MeshWorld.TransformVector(Leg.FootToTip_Component);
-	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTargetWorld);
+	// Otherwise keep the foot planted, but drive the tarsus tip target
+	const FVector TipTarget =
+		Leg.PlantedWorld +
+		MeshWorld.TransformVector(Leg.FootToTip_Component);
+
+	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTarget);
 
 	if (bDrawFootTargets)
 	{
-		// Draw FOOT points (contact points)
 		DrawDebugSphere(GetWorld(), Leg.PlantedWorld, 40.0f, 12, FColor::Red, false, 0.0f);
 		DrawDebugSphere(GetWorld(), Leg.DesiredWorld, 40.0f, 12, FColor::Green, false, 0.0f);
-
-		// Draw TIP target (what FABRIK is actually using)
-		DrawDebugSphere(GetWorld(), TipTargetWorld, 40.0f, 12, FColor::Cyan, false, 0.0f);
+		DrawDebugSphere(GetWorld(), TipTarget, 40.0f, 12, FColor::Cyan, false, 0.0f);
 	}
 
-	// Step decision uses FOOT distances, because that's what you care about on ground
-	if (IsLegAllowedToSwing(Leg, Cycle01))
+	// No commanded motion -> do not start a new step
+	if (CommandedSpeed < 1.0f)
 	{
-		const float Dist = FVector::Dist2D(Leg.PlantedWorld, Leg.DesiredWorld);
-		if (Dist > StepTriggerDistance)
-		{
-			BeginStep(Leg, Leg.DesiredWorld);
-		}
+		return;
 	}
+
+	// Wrong group -> cannot start
+	const bool bCorrectGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
+	if (!bCorrectGroup)
+	{
+		return;
+	}
+
+	// Already finished this group -> wait for group swap
+	if (Leg.bDoneThisGroup)
+	{
+		return;
+	}
+
+	// Start a step if far enough from desired position
+	const float Dist = FVector::Dist2D(Leg.PlantedWorld, Leg.DesiredWorld);
+	if (Dist > StepTriggerDistance)
+	{
+		BeginStep(Leg, Leg.DesiredWorld);
+	}
+}
+
+bool UProceduralSpiderGaitComponent::IsLegInGroupA(ESpiderLeg LegId) const
+{
+	// GroupA: L1 L3 R2 R4
+	return (LegId == ESpiderLeg::L1) || (LegId == ESpiderLeg::L3) || (LegId == ESpiderLeg::R2) || (LegId == ESpiderLeg::R4);
 }
 
 bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& OutWorldTarget) const
@@ -2899,9 +3189,60 @@ bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& Out
 	return false;
 }
 
+
+float UProceduralSpiderGaitComponent::GetStepLengthForLeg(ESpiderLeg LegId) const
+{
+	switch (LegId)
+	{
+	case ESpiderLeg::L1:
+	case ESpiderLeg::R1:
+		return StepLength1;
+
+	case ESpiderLeg::L2:
+	case ESpiderLeg::R2:
+		return StepLength2;
+
+	case ESpiderLeg::L3:
+	case ESpiderLeg::R3:
+		return StepLength3;
+
+	case ESpiderLeg::L4:
+	case ESpiderLeg::R4:
+		return StepLength4;
+
+	default:
+		return StepLength3;
+	}
+}
+
+float UProceduralSpiderGaitComponent::GetStepHeightForLeg(ESpiderLeg LegId) const
+{
+	switch (LegId)
+	{
+	case ESpiderLeg::L1:
+	case ESpiderLeg::R1:
+		return StepHeight1;
+
+	case ESpiderLeg::L2:
+	case ESpiderLeg::R2:
+		return StepHeight2;
+
+	case ESpiderLeg::L3:
+	case ESpiderLeg::R3:
+		return StepHeight3;
+
+	case ESpiderLeg::L4:
+	case ESpiderLeg::R4:
+		return StepHeight4;
+
+	default:
+		return StepHeight3;
+	}
+}
+
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\ProceduralSpiderGaitComponent.h  |  SHA1(utf8): 500a55ce8db7
+// FILE: AdvancedGameplay\Spider\ProceduralSpiderGaitComponent.h  |  SHA1(utf8): a62a029f44b2
 // ProceduralSpiderGaitComponent.h
 
 #pragma once
@@ -2930,16 +3271,31 @@ public:
 	float DutyFactor = 0.68f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float CycleSeconds = 1.6f;
+	float StepLength1 = 600.0f; // front legs: L1 / R1
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float StepHeight = 6.0f;
+	float StepLength2 = 750.0f; // second row: L2 / R2
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength3 = 900.0f; // third row: L3 / R3
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepLength4 = 800.0f; // rear row: L4 / R4
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight1 = 35.0f; // front legs
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight2 = 45.0f; // second row
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight3 = 50.0f; // third row
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float StepHeight4 = 40.0f; // rear row
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float StepTriggerDistance = 10.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
-	float StepReachForward = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float TraceUp = 30.0f;
@@ -2963,6 +3319,21 @@ public:
 	
 	bool IsInitialized() const { return bInitializedFromPose; }
 	
+	// Controller drives this (units/sec)
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
+	float CommandedSpeed = 0.f;
+
+	
+
+	// Derived cycle duration
+	float CurrentCycleSeconds = 1.f;
+
+	// active stepping group
+	bool bGroupASwings = true;
+
+	// number of legs that still must land in current group
+	int32 RemainingInGroup = 0;
+	
 
 
 private:
@@ -2970,28 +3341,27 @@ private:
 	FTimerHandle InitTimerHandle;
 
 	void InitializeFromCurrentPose();
-	float AccumTime = 0.0f;
-	int32 PrevHalf = -1;
-	bool bGroupASwings = true;
-
+	
 private:
 	void InitializeDefaultsIfEmpty();
 	void UpdateCycle(float DeltaTime);
 	void UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float Cycle01);
 
 	bool IsLegInGroupA(ESpiderLeg LegId) const;
-	bool IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const;
 
 	bool SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const;
 	FVector ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const;
 
 	void BeginStep(FSpiderLegRuntime& Leg, const FVector& NewEndWorld);
 	void TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration);
+	
+	float GetStepLengthForLeg(ESpiderLeg LegId) const;
+	float GetStepHeightForLeg(ESpiderLeg LegId) const;
 };
 
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\SpiderAnimInstance.cpp  |  SHA1(utf8): 12dfb1bb2f22
+// FILE: AdvancedGameplay\Spider\SpiderAnimInstance.cpp  |  SHA1(utf8): 5b451b7fef5d
 #include "SpiderAnimInstance.h"
 #include "ProceduralSpiderGaitComponent.h"
 #include "GameFramework/Pawn.h"
@@ -3029,13 +3399,6 @@ void USpiderAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 		{
 			IKTargets[i] = TargetWorld.GetRelativeTransform(ComponentWorld);
 			bGotAtLeastOne = true;
-			
-			if (i == 0)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("L1 Target: World=%s  Component=%s"),
-					*TargetWorld.GetLocation().ToString(),
-					*IKTargets[i].GetLocation().ToString());
-			}
 		}
 	}
 
@@ -3118,35 +3481,144 @@ private:
 
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\SpiderCharacter.cpp  |  SHA1(utf8): 32b408efffd1
+// FILE: AdvancedGameplay\Spider\SpiderCharacter.cpp  |  SHA1(utf8): 587014967ff4
 #include "SpiderCharacter.h"
 #include "ProceduralSpiderGaitComponent.h"
-#include "Components/CapsuleComponent.h"
+
+#include "Camera/CameraComponent.h"
+#include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Components/InputComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "InputCoreTypes.h"
+#include "AdvancedGameplay/Physics/AG_RigidbodyComponent.h"
 
 ASpiderCharacter::ASpiderCharacter()
 {
 	PrimaryActorTick.bCanEverTick = true;
 
-	// Character defaults that usually help for creatures
+	bUseControllerRotationYaw = false;
+	bUseControllerRotationPitch = false;
+	bUseControllerRotationRoll = false;
+
 	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, 540.0f, 0.0f);
+	GetCharacterMovement()->RotationRate = FRotator(0.0f, RotationRateDegrees, 0.0f);
+	GetCharacterMovement()->MaxWalkSpeed = MaxWalkSpeed;
 
-	// You can tune these later
-	GetCharacterMovement()->MaxWalkSpeed = 200.0f;
-	GetCharacterMovement()->BrakingDecelerationWalking = 2048.0f;
-
-	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("ProceduralSpiderGait"));
+	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("SpiderGait"));
 }
 
 void ASpiderCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+
+	SpringArm = FindComponentByClass<USpringArmComponent>();
+	Camera = FindComponentByClass<UCameraComponent>();
+
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (PlayerController)
+	{
+		PlayerController->SetInputMode(FInputModeGameOnly());
+		PlayerController->bShowMouseCursor = false;
+	}
+
+	UCapsuleComponent* Capsule = GetCapsuleComponent();
+	if (Capsule)
+	{
+		Capsule->SetNotifyRigidBodyCollision(true);
+		Capsule->OnComponentHit.AddDynamic(this, &ASpiderCharacter::OnSpiderHit);
+	}
+}
+
+void ASpiderCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	HandleRawMovement();
+
+	if (SpiderGait)
+	{
+		const FVector Velocity = GetVelocity();
+		const float Speed2D = FVector(Velocity.X, Velocity.Y, 0.0f).Size();
+		SpiderGait->CommandedSpeed = Speed2D;
+	}
+}
+
+void ASpiderCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+}
+
+void ASpiderCharacter::HandleRawMovement()
+{
+	APlayerController* PlayerController = Cast<APlayerController>(GetController());
+	if (!PlayerController || !Controller)
+	{
+		return;
+	}
+
+	float ForwardValue = 0.0f;
+
+	if (PlayerController->IsInputKeyDown(EKeys::W))
+	{
+		ForwardValue += 1.0f;
+	}
+
+	if (!FMath::IsNearlyZero(ForwardValue))
+	{
+		const FRotator ControlRotation = Controller->GetControlRotation();
+		const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
+		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+		AddMovementInput(ForwardDirection, ForwardValue);
+	}
+
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	PlayerController->GetInputMouseDelta(MouseX, MouseY);
+
+	if (!FMath::IsNearlyZero(MouseX))
+	{
+		AddControllerYawInput(MouseX);
+	}
+
+	if (!FMath::IsNearlyZero(MouseY))
+	{
+		AddControllerPitchInput(-MouseY);
+	}
+}
+
+void ASpiderCharacter::OnSpiderHit(
+	UPrimitiveComponent* HitComponent,
+	AActor* OtherActor,
+	UPrimitiveComponent* OtherComp,
+	FVector NormalImpulse,
+	const FHitResult& Hit)
+{
+	if (!OtherActor || OtherActor == this)
+	{
+		return;
+	}
+
+	UAG_RigidbodyComponent* OtherBody = OtherActor->FindComponentByClass<UAG_RigidbodyComponent>();
+	if (!OtherBody)
+	{
+		return;
+	}
+
+	FVector PushDirection = GetVelocity().GetSafeNormal();
+
+	if (PushDirection.IsNearlyZero())
+	{
+		PushDirection = GetActorForwardVector();
+	}
+
+	OtherBody->AddForce(PushDirection * PushForce);
 }
 
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\SpiderCharacter.h  |  SHA1(utf8): eb18cbe57a6d
+// FILE: AdvancedGameplay\Spider\SpiderCharacter.h  |  SHA1(utf8): 21ca556b94ff
 #pragma once
 
 #include "CoreMinimal.h"
@@ -3154,6 +3626,10 @@ void ASpiderCharacter::BeginPlay()
 #include "SpiderCharacter.generated.h"
 
 class UProceduralSpiderGaitComponent;
+class USpringArmComponent;
+class UCameraComponent;
+class UPrimitiveComponent;
+class UAG_RigidbodyComponent;
 
 UCLASS()
 class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
@@ -3163,17 +3639,44 @@ class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
 public:
 	ASpiderCharacter();
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider")
+	float MaxWalkSpeed = 800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider")
+	float RotationRateDegrees = 360.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider|Push")
+	float PushForce = 250000.0f;
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void Tick(float DeltaTime) override;
+	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+
+	void HandleRawMovement();
+
+	UFUNCTION()
+	void OnSpiderHit(
+		UPrimitiveComponent* HitComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		FVector NormalImpulse,
+		const FHitResult& Hit);
 
 public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Spider")
 	TObjectPtr<UProceduralSpiderGaitComponent> SpiderGait;
+
+	UPROPERTY(BlueprintReadOnly, Category="Camera")
+	TObjectPtr<USpringArmComponent> SpringArm = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category="Camera")
+	TObjectPtr<UCameraComponent> Camera = nullptr;
 };
 
 ================================================================================
 
-// FILE: AdvancedGameplay\Spider\SpiderGaitTypes.h  |  SHA1(utf8): 196bbe6a7c32
+// FILE: AdvancedGameplay\Spider\SpiderGaitTypes.h  |  SHA1(utf8): 42401c71f12e
 // SpiderGaitTypes.h
 #pragma once
 
@@ -3220,9 +3723,6 @@ struct FSpiderLegRuntime
 	bool bStepping = false;
 
 	UPROPERTY(BlueprintReadOnly)
-	float PhaseOffset = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly)
 	FVector PlantedWorld = FVector::ZeroVector;
 
 	UPROPERTY(BlueprintReadOnly)
@@ -3246,4 +3746,7 @@ struct FSpiderLegRuntime
 	
 	UPROPERTY(BlueprintReadOnly)
 	FVector FootToTip_Component = FVector::ZeroVector;
+	
+	UPROPERTY(BlueprintReadOnly)
+	bool bDoneThisGroup = false;
 };

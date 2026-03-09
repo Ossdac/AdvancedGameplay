@@ -115,8 +115,6 @@ void UProceduralSpiderGaitComponent::InitializeDefaultsIfEmpty()
 }
 void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 {
-	AccumTime += DeltaTime;
-
 	const float Speed = FMath::Max(CommandedSpeed, 0.0f);
 
 	if (Speed < 1.0f)
@@ -124,7 +122,10 @@ void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 		return;
 	}
 
-	const float StepFrequency = Speed / FMath::Max(1.0f, StepLength);
+	// Use row 3 as the default gait basis since it is your main stride row.
+	const float GaitBasisStepLength = FMath::Max(1.0f, StepLength3);
+
+	const float StepFrequency = Speed / GaitBasisStepLength;
 	CurrentCycleSeconds = 1.0f / FMath::Max(StepFrequency, 0.01f);
 
 	if (RemainingInGroup > 0)
@@ -146,22 +147,6 @@ void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 	}
 }
 
-bool UProceduralSpiderGaitComponent::IsLegAllowedToSwing(const FSpiderLegRuntime& Leg, float Cycle01) const
-{
-	const bool bInActiveGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
-
-	if (!bInActiveGroup)
-	{
-		return false;
-	}
-
-	if (Leg.bDoneThisGroup)
-	{
-		return false;
-	}
-
-	return true;
-}
 
 
 bool UProceduralSpiderGaitComponent::SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const
@@ -194,7 +179,7 @@ FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLeg
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
 
-	// Reconstruct rest foot position from the stored component-space offset.
+	// Reconstruct rest foot position from the stored component-space position
 	FVector GuessWorld = MeshWorld.TransformPosition(Leg.RestOffset_Component);
 
 	const FVector Vel = Owner->GetVelocity();
@@ -202,7 +187,8 @@ FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLeg
 
 	if (!MoveDir.IsNearlyZero())
 	{
-		GuessWorld += MoveDir * StepLength;
+		const float StepLengthForThisLeg = GetStepLengthForLeg(Leg.LegId);
+		GuessWorld += MoveDir * StepLengthForThisLeg;
 	}
 
 	FVector HitP, HitN;
@@ -232,7 +218,7 @@ void UProceduralSpiderGaitComponent::TickStep(
 	float DeltaTime,
 	float SwingDuration)
 {
-	Leg.StepAlpha += DeltaTime / SwingDuration;
+	Leg.StepAlpha += DeltaTime / FMath::Max(0.001f, SwingDuration);
 	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha, 0.f, 1.f);
 
 	const float A = Leg.StepAlpha;
@@ -240,11 +226,13 @@ void UProceduralSpiderGaitComponent::TickStep(
 	const FVector Flat =
 		FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
 
+	const float StepHeightForThisLeg = GetStepHeightForLeg(Leg.LegId);
+
 	const float Lift =
-		FMath::Sin(A * PI) * StepHeight;
+		FMath::Sin(A * PI) * StepHeightForThisLeg;
 
 	const FVector FootPos =
-		Flat + FVector(0,0,Lift);
+		Flat + FVector(0, 0, Lift);
 
 	AActor* Owner = GetOwner();
 	if (!Owner) return;
@@ -377,4 +365,55 @@ bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& Out
 		}
 	}
 	return false;
+}
+
+
+float UProceduralSpiderGaitComponent::GetStepLengthForLeg(ESpiderLeg LegId) const
+{
+	switch (LegId)
+	{
+	case ESpiderLeg::L1:
+	case ESpiderLeg::R1:
+		return StepLength1;
+
+	case ESpiderLeg::L2:
+	case ESpiderLeg::R2:
+		return StepLength2;
+
+	case ESpiderLeg::L3:
+	case ESpiderLeg::R3:
+		return StepLength3;
+
+	case ESpiderLeg::L4:
+	case ESpiderLeg::R4:
+		return StepLength4;
+
+	default:
+		return StepLength3;
+	}
+}
+
+float UProceduralSpiderGaitComponent::GetStepHeightForLeg(ESpiderLeg LegId) const
+{
+	switch (LegId)
+	{
+	case ESpiderLeg::L1:
+	case ESpiderLeg::R1:
+		return StepHeight1;
+
+	case ESpiderLeg::L2:
+	case ESpiderLeg::R2:
+		return StepHeight2;
+
+	case ESpiderLeg::L3:
+	case ESpiderLeg::R3:
+		return StepHeight3;
+
+	case ESpiderLeg::L4:
+	case ESpiderLeg::R4:
+		return StepHeight4;
+
+	default:
+		return StepHeight3;
+	}
 }

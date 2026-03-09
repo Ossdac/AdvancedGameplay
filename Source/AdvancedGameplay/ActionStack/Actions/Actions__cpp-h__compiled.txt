@@ -1,0 +1,254 @@
+// FILE: AG_ActionBase.cpp  |  SHA1(utf8): c485ef0bfce5
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
+#include "AG_ActionBase.h"
+
+
+
+================================================================================
+
+// FILE: AG_ActionBase.h  |  SHA1(utf8): 454df3a996b5
+// Fill out your copyright notice in the Description page of Project Settings.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "UObject/Object.h"
+#include "AG_ActionBase.generated.h"
+
+/**
+ * 
+ */
+UCLASS()
+class ADVANCEDGAMEPLAY_API UAG_ActionBase : public UObject
+{
+	GENERATED_BODY()
+	
+public:
+	// Called when this action becomes the current top action
+	virtual void OnBegin(bool bFirstTime) {}
+
+	// Called every frame while this is the current action
+	virtual void OnUpdate() {}
+
+	// Called when the action is popped / finished
+	virtual void OnEnd() {}
+
+	// Returns true when this action is finished and should be removed
+	virtual bool IsDone() const { return true; }
+
+	// Optional debug name
+	virtual FString GetDebugName() const { return GetName(); }
+};
+
+
+
+================================================================================
+
+// FILE: AG_MainMenuAction.cpp  |  SHA1(utf8): 6077d550914d
+#include "AG_MainMenuAction.h"
+
+#include "AG_PlayAction.h"
+#include "AdvancedGameplay/AG_GameInstance.h"
+#include "Engine/Engine.h"
+#include "Kismet/KismetSystemLibrary.h"
+
+void UAG_MainMenuAction::OnBegin(bool bFirstTime)
+{
+	bDone = false;
+
+	if (GEngine)
+	{
+		// GEngine->AddOnScreenDebugMessage(
+		// 	-1, 5.0f, FColor::Cyan,
+		// 	TitleText + ": OnBegin"
+		// );
+	}
+}
+
+void UAG_MainMenuAction::OnUpdate()
+{
+	UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC) { return; }
+
+	// if (GEngine)
+	// {
+	// 	GEngine->AddOnScreenDebugMessage(
+	// 		-1, .01f, FColor::Cyan,
+	// 		TitleText
+	// 	);
+	// }
+
+	if (PC->WasInputKeyJustPressed(EKeys::Enter))
+	{
+		StartGame();
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::Escape))
+	{
+		RequestExit();
+	}
+}
+
+void UAG_MainMenuAction::OnEnd()
+{
+	if (bDone)
+	{
+		UWorld* World = GetWorld();
+		if (World)
+		{
+			APlayerController* PC = World->GetFirstPlayerController();
+			UKismetSystemLibrary::QuitGame(World, PC, EQuitPreference::Quit, false);
+		}
+	}
+}
+
+bool UAG_MainMenuAction::IsDone() const
+{
+	// Only true when the player has explicitly requested exit.
+	return bDone;
+}
+
+void UAG_MainMenuAction::StartGame()
+{
+	UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	UAG_GameInstance* GI = Cast<UAG_GameInstance>(World->GetGameInstance());
+	if (!GI) { return; }
+
+	UAG_PlayAction* PlayAction = NewObject<UAG_PlayAction>(GI);
+	GI->GetActionStack().PushAction(PlayAction);
+}
+
+void UAG_MainMenuAction::RequestExit()
+{
+	bDone = true;
+}
+
+
+================================================================================
+
+// FILE: AG_MainMenuAction.h  |  SHA1(utf8): a603557b598b
+#pragma once
+
+#include "CoreMinimal.h"
+#include "AG_ActionBase.h"
+#include "UObject/Object.h"
+#include "AG_MainMenuAction.generated.h"
+
+/*
+ * Main Menu Action that acts as a root of the ActionStack
+ */
+
+UCLASS(Blueprintable)
+class ADVANCEDGAMEPLAY_API UAG_MainMenuAction : public UAG_ActionBase
+{
+	GENERATED_BODY()
+
+public:
+	// Text to show in the menu
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="MainMenu")
+	FString TitleText = TEXT("MAIN MENU - Press Enter to Start");
+
+	// IAction interface
+	virtual void OnBegin(bool bFirstTime) override;
+	virtual void OnUpdate() override;
+	virtual void OnEnd() override;
+	virtual bool IsDone() const override;
+
+private:
+	// Only true when Exiting the game to keep the main menu action as a root
+	bool bDone = false;
+
+	void StartGame();
+	void RequestExit();
+};
+
+
+================================================================================
+
+// FILE: AG_PlayAction.cpp  |  SHA1(utf8): cccb4a48a864
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
+#include "AG_PlayAction.h"
+
+void UAG_PlayAction::OnBegin(bool bFirstTime)
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1, 5.f, FColor::Green,
+			"Game Started: OnBegin"
+		);
+	}
+}
+
+void UAG_PlayAction::OnUpdate()
+{
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(
+			-1, .1f, FColor::Green,
+			"Holy cow this is fun playing the game!"
+		);
+	}
+
+	UWorld* World = GetWorld();
+	if (!World) { return; }
+
+	APlayerController* PC = World->GetFirstPlayerController();
+	if (!PC) { return; }
+
+	if (PC->WasInputKeyJustPressed(EKeys::BackSpace))
+	{
+		bDone = true; 
+	}
+}
+
+void UAG_PlayAction::OnEnd()
+{
+}
+
+bool UAG_PlayAction::IsDone() const
+{
+	return bDone;
+}
+
+
+================================================================================
+
+// FILE: AG_PlayAction.h  |  SHA1(utf8): 7d26118033d8
+// Fill out your copyright notice in the Description page of Project Settings.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "AG_ActionBase.h"
+#include "UObject/Object.h"
+#include "AG_PlayAction.generated.h"
+
+/**
+ * 
+ */
+UCLASS()
+class ADVANCEDGAMEPLAY_API UAG_PlayAction : public UAG_ActionBase
+{
+	GENERATED_BODY()
+
+public:
+	
+	// IAction interface
+	virtual void OnBegin(bool bFirstTime) override;
+	virtual void OnUpdate() override;
+	virtual void OnEnd() override;
+	virtual bool IsDone() const override;
+
+private:
+	bool bDone = false;
+};

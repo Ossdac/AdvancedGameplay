@@ -7,6 +7,8 @@
 class UProceduralSpiderGaitComponent;
 class USpringArmComponent;
 class UCameraComponent;
+class UPrimitiveComponent;
+class UAG_RigidbodyComponent;
 
 UCLASS()
 class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
@@ -16,12 +18,29 @@ class ADVANCEDGAMEPLAY_API ASpiderCharacter : public ACharacter
 public:
 	ASpiderCharacter();
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider")
+	float MaxWalkSpeed = 800.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider")
+	float RotationRateDegrees = 360.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Spider|Push")
+	float PushForce = 250000.0f;
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaTime) override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 	void HandleRawMovement();
+
+	UFUNCTION()
+	void OnSpiderHit(
+		UPrimitiveComponent* HitComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		FVector NormalImpulse,
+		const FHitResult& Hit);
 
 public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Spider")

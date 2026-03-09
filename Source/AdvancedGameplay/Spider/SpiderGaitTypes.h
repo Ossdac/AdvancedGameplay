@@ -44,9 +44,6 @@ struct FSpiderLegRuntime
 	bool bStepping = false;
 
 	UPROPERTY(BlueprintReadOnly)
-	float PhaseOffset = 0.0f;
-
-	UPROPERTY(BlueprintReadOnly)
 	FVector PlantedWorld = FVector::ZeroVector;
 
 	UPROPERTY(BlueprintReadOnly)
