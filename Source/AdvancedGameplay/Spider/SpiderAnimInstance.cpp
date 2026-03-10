@@ -15,7 +15,6 @@ void USpiderAnimInstance::NativeUpdateAnimation(float DeltaSeconds)
 	USkeletalMeshComponent* SkelComp = GetSkelMeshComponent();
 	if (!SkelComp) return;
 
-	// IMPORTANT: don't "create validity" by SetNum every tick
 	if (IKTargets.Num() != 8)
 	{
 		IKTargets.SetNum(8);

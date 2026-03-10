@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "AdvancedGameplay/Spider/SpiderCharacter.h"
 #include "Components/ActorComponent.h"
 #include "AG_RigidbodyComponent.generated.h"
 
@@ -107,6 +108,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Forces")
 	void AddTorque(const FVector& Torque);
+	
+	UFUNCTION(BlueprintCallable, Category="AG Rigidbody")
+	void AddDriveDirectionInput(const FVector& WorldDirection, float InputStrength, float MaxAccelerationCm, float MaxSpeedCm);
+
+	UFUNCTION(BlueprintCallable, BlueprintPure, Category="AG Rigidbody")
+	FVector GetVelocityUnsafe() const { return Velocity; }
 
 	// -----------------------------
 	// Angular
@@ -140,7 +147,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
 	void AddRollTorqueInput(float ForwardInput, float RightInput, float MaxTorque = 500000.0f);
 
-	// New: per-axis input helpers (additive; do not remove combined version)
+	// Per-axis input helpers
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
 	void AddDriveForwardInput(float ForwardInput, float MaxAccelerationCm = 3000.0f, float MaxSpeedCm = 2500.0f);
 
@@ -183,6 +190,7 @@ public:
 	// Utility (existing)
 	UFUNCTION(BlueprintCallable, Category="AG Rigidbody|Control")
 	void NudgeOutOfGeometry(float Distance = 2.0f);
+	void ApplyBrake(float Strength);
 
 protected:
 	// --- UActorComponent ---

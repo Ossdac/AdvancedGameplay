@@ -26,6 +26,15 @@ void UAG_PlayAction::OnBegin(bool bFirstTime)
 		PC->SetIgnoreLookInput(false);
 	}
 
+	ASpiderCharacter* Spider = Cast<ASpiderCharacter>(
+		UGameplayStatics::GetActorOfClass(World, ASpiderCharacter::StaticClass())
+	);
+
+	if (Spider)
+	{
+		Spider->SetGameplayActive(true);
+	}
+
 	FindActors();
 }
 
@@ -66,13 +75,13 @@ void UAG_PlayAction::OnUpdate()
 		return;
 	}
 
-	if (!bResultShown && BallActor->GetActorLocation().Y <= BallWinY)
+	if (!bResultShown && BallActor->GetActorLocation().Z <= BallWinY)
 	{
 		ShowResult(TEXT("CONGRATULATIONS"));
 		return;
 	}
 
-	if (!bResultShown && SpiderActor->GetActorLocation().Y <= SpiderLoseY)
+	if (!bResultShown && SpiderActor->GetActorLocation().Z <= SpiderLoseY)
 	{
 		ShowResult(TEXT("YOU LOST"));
 		return;
@@ -87,6 +96,20 @@ void UAG_PlayAction::OnUpdate()
 
 void UAG_PlayAction::OnEnd()
 {
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+
+	ASpiderCharacter* Spider = Cast<ASpiderCharacter>(
+		UGameplayStatics::GetActorOfClass(World, ASpiderCharacter::StaticClass())
+	);
+
+	if (Spider)
+	{
+		Spider->SetGameplayActive(false);
+	}
 }
 
 bool UAG_PlayAction::IsDone() const

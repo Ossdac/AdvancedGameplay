@@ -23,8 +23,8 @@ private:
 	bool bResultShown = false;
 
 	// Change these numbers in code if needed.
-	float BallWinY = -1200.0f;
-	float SpiderLoseY = -1200.0f;
+	float BallWinY = 0.0f;
+	float SpiderLoseY = 0.0f;
 
 	TWeakObjectPtr<AActor> BallActor;
 	TWeakObjectPtr<ASpiderCharacter> SpiderActor;

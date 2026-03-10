@@ -1,5 +1,6 @@
 #include "SpiderCharacter.h"
 #include "ProceduralSpiderGaitComponent.h"
+#include "AdvancedGameplay/Physics/AG_RigidbodyComponent.h"
 
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
@@ -8,7 +9,6 @@
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
-#include "AdvancedGameplay/Physics/AG_RigidbodyComponent.h"
 
 ASpiderCharacter::ASpiderCharacter()
 {
@@ -18,11 +18,11 @@ ASpiderCharacter::ASpiderCharacter()
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationRoll = false;
 
-	GetCharacterMovement()->bOrientRotationToMovement = true;
-	GetCharacterMovement()->RotationRate = FRotator(0.0f, RotationRateDegrees, 0.0f);
-	GetCharacterMovement()->MaxWalkSpeed = MaxWalkSpeed;
+	GetCharacterMovement()->Deactivate();
+	GetCharacterMovement()->SetComponentTickEnabled(false);
 
 	SpiderGait = CreateDefaultSubobject<UProceduralSpiderGaitComponent>(TEXT("SpiderGait"));
+	SpiderBody = CreateDefaultSubobject<UAG_RigidbodyComponent>(TEXT("SpiderBody"));
 }
 
 void ASpiderCharacter::BeginPlay()
@@ -40,10 +40,10 @@ void ASpiderCharacter::BeginPlay()
 	}
 
 	UCapsuleComponent* Capsule = GetCapsuleComponent();
-	if (Capsule)
+	if (SpiderBody && Capsule)
 	{
-		Capsule->SetNotifyRigidBodyCollision(true);
-		Capsule->OnComponentHit.AddDynamic(this, &ASpiderCharacter::OnSpiderHit);
+		SpiderBody->SetUpdatedComponent(Capsule);
+		SpiderBody->SetRotationEnabled(false, true);
 	}
 }
 
@@ -51,13 +51,22 @@ void ASpiderCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
-	HandleRawMovement();
+	if (bGameplayActive)
+	{
+		HandleRawMovement();
+		UpdateVisualFacing();
+	}
 
 	if (SpiderGait)
 	{
-		const FVector Velocity = GetVelocity();
-		const float Speed2D = FVector(Velocity.X, Velocity.Y, 0.0f).Size();
-		SpiderGait->CommandedSpeed = Speed2D;
+		if (bGameplayActive && SpiderBody)
+		{
+			SpiderGait->CommandedSpeed = SpiderBody->GetPlanarSpeed();
+		}
+		else
+		{
+			SpiderGait->CommandedSpeed = 0.0f;
+		}
 	}
 }
 
@@ -69,24 +78,9 @@ void ASpiderCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCom
 void ASpiderCharacter::HandleRawMovement()
 {
 	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	if (!PlayerController || !Controller)
+	if (!PlayerController || !Controller || !SpiderBody)
 	{
 		return;
-	}
-
-	float ForwardValue = 0.0f;
-
-	if (PlayerController->IsInputKeyDown(EKeys::W))
-	{
-		ForwardValue += 1.0f;
-	}
-
-	if (!FMath::IsNearlyZero(ForwardValue))
-	{
-		const FRotator ControlRotation = Controller->GetControlRotation();
-		const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
-		const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
-		AddMovementInput(ForwardDirection, ForwardValue);
 	}
 
 	float MouseX = 0.0f;
@@ -95,39 +89,67 @@ void ASpiderCharacter::HandleRawMovement()
 
 	if (!FMath::IsNearlyZero(MouseX))
 	{
-		AddControllerYawInput(MouseX);
+		AddControllerYawInput(MouseX * MouseYawSpeed);
 	}
 
 	if (!FMath::IsNearlyZero(MouseY))
 	{
-		AddControllerPitchInput(-MouseY);
+		AddControllerPitchInput(-MouseY * MousePitchSpeed);
+	}
+
+	float ForwardValue = 0.0f;
+	if (PlayerController->IsInputKeyDown(EKeys::W))
+	{
+		ForwardValue = 1.0f;
+	}
+
+	const FRotator ControlRotation = Controller->GetControlRotation();
+	const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
+	const FVector CameraForward = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+
+	if (!FMath::IsNearlyZero(ForwardValue))
+	{
+		SpiderBody->AddDriveDirectionInput(CameraForward, ForwardValue, DriveAcceleration, DriveMaxSpeed);
+	}
+	else
+	{
+		SpiderBody->StopMotion();
 	}
 }
 
-void ASpiderCharacter::OnSpiderHit(
-	UPrimitiveComponent* HitComponent,
-	AActor* OtherActor,
-	UPrimitiveComponent* OtherComp,
-	FVector NormalImpulse,
-	const FHitResult& Hit)
+void ASpiderCharacter::UpdateVisualFacing()
 {
-	if (!OtherActor || OtherActor == this)
+	if (!Controller)
 	{
 		return;
 	}
 
-	UAG_RigidbodyComponent* OtherBody = OtherActor->FindComponentByClass<UAG_RigidbodyComponent>();
-	if (!OtherBody)
+	const FRotator ControlRotation = Controller->GetControlRotation();
+	const FRotator YawRotation(0.0f, ControlRotation.Yaw, 0.0f);
+	SetActorRotation(YawRotation);
+}
+
+FVector ASpiderCharacter::GetMovementVelocity() const
+{
+	if (SpiderBody)
 	{
-		return;
+		return SpiderBody->GetPlanarVelocity();
 	}
 
-	FVector PushDirection = GetVelocity().GetSafeNormal();
+	return GetVelocity();
+}
 
-	if (PushDirection.IsNearlyZero())
+void ASpiderCharacter::SetGameplayActive(bool bActive)
+{
+	bGameplayActive = bActive;
+
+	if (!bGameplayActive && SpiderBody)
 	{
-		PushDirection = GetActorForwardVector();
+		SpiderBody->StopMotion(true, true, true);
 	}
 
-	OtherBody->AddForce(PushDirection * PushForce);
+	if (SpiderGait)
+	{
+		SpiderGait->CommandedSpeed = 0.0f;
+	}
 }

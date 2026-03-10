@@ -1,10 +1,11 @@
-// ProceduralSpiderGaitComponent.cpp
-
 #include "ProceduralSpiderGaitComponent.h"
+
+#include "SpiderCharacter.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Character.h"
+#include "Components/SkeletalMeshComponent.h"
 
 UProceduralSpiderGaitComponent::UProceduralSpiderGaitComponent()
 {
@@ -37,7 +38,7 @@ void UProceduralSpiderGaitComponent::TickComponent(
 
 	for (FSpiderLegRuntime& Leg : Legs)
 	{
-		UpdateLeg(Leg, DeltaTime, 0.f);
+		UpdateLeg(Leg, DeltaTime, 0.0f);
 	}
 }
 
@@ -51,13 +52,18 @@ void UProceduralSpiderGaitComponent::InitializeFromCurrentPose()
 	InitializeDefaultsIfEmpty();
 
 	AActor* Owner = GetOwner();
-	if (!Owner) return;
+	if (!Owner)
+	{
+		return;
+	}
 
 	ACharacter* Character = Cast<ACharacter>(Owner);
 	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
-	if (!Mesh) return;
+	if (!Mesh)
+	{
+		return;
+	}
 
-	// Ensure bone/socket queries are valid right now
 	Mesh->RefreshBoneTransforms();
 	Mesh->FinalizeBoneTransform();
 
@@ -67,27 +73,23 @@ void UProceduralSpiderGaitComponent::InitializeFromCurrentPose()
 	{
 		Leg.bInStance = true;
 		Leg.bStepping = false;
+		Leg.bDoneThisGroup = false;
 		Leg.StepAlpha = 0.0f;
 
 		const bool bHasFootSocket = !Leg.FootSocketName.IsNone() && Mesh->DoesSocketExist(Leg.FootSocketName);
 		const FName FootName = bHasFootSocket ? Leg.FootSocketName : Leg.EndBoneName;
 
-		// Current pose locations (world)
 		const FVector FootWorld = Mesh->GetSocketLocation(FootName);
-		const FVector TipWorld  = Mesh->GetSocketLocation(Leg.EndBoneName);
+		const FVector TipWorld = Mesh->GetSocketLocation(Leg.EndBoneName);
 
-		// Convert both to mesh component space
 		const FVector FootCS = MeshWorld.InverseTransformPosition(FootWorld);
-		const FVector TipCS  = MeshWorld.InverseTransformPosition(TipWorld);
+		const FVector TipCS = MeshWorld.InverseTransformPosition(TipWorld);
 
-		// Cache offsets
-		Leg.RestOffset_Component = FootCS;            // rest FOOT (socket) position in component space
-		Leg.FootToTip_Component  = TipCS - FootCS;    // vector from foot socket to tarsus tip, in component space
+		Leg.RestOffset_Component = FootCS;
+		Leg.FootToTip_Component = TipCS - FootCS;
 
-		// Start planted at current pose (foot contact)
 		Leg.PlantedWorld = FootWorld;
 
-		// IMPORTANT: IK target must be the TIP target (tarsus), not the foot target
 		const FVector TipTargetWorld = MeshWorld.TransformPosition(FootCS + Leg.FootToTip_Component);
 		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTargetWorld);
 	}
@@ -113,18 +115,16 @@ void UProceduralSpiderGaitComponent::InitializeDefaultsIfEmpty()
 		Legs[7].LegId = ESpiderLeg::R4; Legs[7].IKBoneName = TEXT("Leg4_IKtarsus_R"); Legs[7].EndBoneName = TEXT("Leg4_tarsus_R"); Legs[7].FootSocketName = TEXT("R4_FootSocket");
 	}
 }
+
 void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 {
 	const float Speed = FMath::Max(CommandedSpeed, 0.0f);
-
 	if (Speed < 1.0f)
 	{
 		return;
 	}
 
-	// Use row 3 as the default gait basis since it is your main stride row.
 	const float GaitBasisStepLength = FMath::Max(1.0f, StepLength3);
-
 	const float StepFrequency = Speed / GaitBasisStepLength;
 	CurrentCycleSeconds = 1.0f / FMath::Max(StepFrequency, 0.01f);
 
@@ -147,21 +147,35 @@ void UProceduralSpiderGaitComponent::UpdateCycle(float DeltaTime)
 	}
 }
 
-
-
 bool UProceduralSpiderGaitComponent::SampleGround(const FVector& WorldFrom, FVector& OutHitPoint, FVector& OutHitNormal) const
 {
-	UWorld* World = GetWorld();
-	if (!World) return false;
+	AActor* Owner = GetOwner();
+	if (!Owner)
+	{
+		return false;
+	}
 
-	const FVector Start = WorldFrom;
-	const FVector End = WorldFrom - FVector(0.0f, 0.0f, TraceDown + TraceUp);
+	ACharacter* Character = Cast<ACharacter>(Owner);
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	UWorld* World = GetWorld();
+
+	if (!Mesh || !World)
+	{
+		return false;
+	}
+
+	const FVector Up = Mesh->GetUpVector().GetSafeNormal();
+	const FVector Start = WorldFrom + Up * TraceUp;
+	const FVector End = WorldFrom - Up * TraceDown;
 
 	FHitResult Hit;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(SpiderFootTrace), false, GetOwner());
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(SpiderFootTrace), false, Owner);
 
 	const bool bHit = World->LineTraceSingleByChannel(Hit, Start, End, GroundTraceChannel, Params);
-	if (!bHit) return false;
+	if (!bHit)
+	{
+		return false;
+	}
 
 	OutHitPoint = Hit.ImpactPoint;
 	OutHitNormal = Hit.ImpactNormal;
@@ -171,28 +185,37 @@ bool UProceduralSpiderGaitComponent::SampleGround(const FVector& WorldFrom, FVec
 FVector UProceduralSpiderGaitComponent::ComputeDesiredFootPoint(const FSpiderLegRuntime& Leg) const
 {
 	AActor* Owner = GetOwner();
-	if (!Owner) return Leg.PlantedWorld;
-
-	ACharacter* Character = Cast<ACharacter>(Owner);
-	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
-	if (!Mesh) return Leg.PlantedWorld;
-
-	const FTransform MeshWorld = Mesh->GetComponentTransform();
-
-	// Reconstruct rest foot position from the stored component-space position
-	FVector GuessWorld = MeshWorld.TransformPosition(Leg.RestOffset_Component);
-
-	const FVector Vel = Owner->GetVelocity();
-	FVector MoveDir = FVector(Vel.X, Vel.Y, 0.0f).GetSafeNormal();
-
-	if (!MoveDir.IsNearlyZero())
+	if (!Owner)
 	{
-		const float StepLengthForThisLeg = GetStepLengthForLeg(Leg.LegId);
-		GuessWorld += MoveDir * StepLengthForThisLeg;
+		return Leg.PlantedWorld;
 	}
 
-	FVector HitP, HitN;
-	if (SampleGround(GuessWorld + FVector(0.0f, 0.0f, TraceUp), HitP, HitN))
+	ASpiderCharacter* Spider = Cast<ASpiderCharacter>(Owner);
+	ACharacter* Character = Cast<ACharacter>(Owner);
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!Mesh)
+	{
+		return Leg.PlantedWorld;
+	}
+
+	const FTransform MeshWorld = Mesh->GetComponentTransform();
+	const FVector Up = MeshWorld.GetUnitAxis(EAxis::Z).GetSafeNormal();
+
+	FVector GuessWorld = MeshWorld.TransformPosition(Leg.RestOffset_Component);
+
+	FVector Vel = Spider ? Spider->GetMovementVelocity() : Owner->GetVelocity();
+	FVector PlanarVel = FVector::VectorPlaneProject(Vel, Up);
+	FVector MoveDir = PlanarVel.GetSafeNormal();
+
+	const float StepLengthForLeg = GetStepLengthForLeg(Leg.LegId);
+	if (!MoveDir.IsNearlyZero())
+	{
+		GuessWorld += MoveDir * StepLengthForLeg;
+	}
+
+	FVector HitP;
+	FVector HitN;
+	if (SampleGround(GuessWorld, HitP, HitN))
 	{
 		const float SnapLimit = (Leg.MaxSnapToGround > 0.0f) ? Leg.MaxSnapToGround : MaxSnapToGround;
 		if (FVector::Dist(HitP, GuessWorld) <= SnapLimit)
@@ -213,130 +236,108 @@ void UProceduralSpiderGaitComponent::BeginStep(FSpiderLegRuntime& Leg, const FVe
 	Leg.StepEndWorld = NewEndWorld;
 }
 
-void UProceduralSpiderGaitComponent::TickStep(
-	FSpiderLegRuntime& Leg,
-	float DeltaTime,
-	float SwingDuration)
+void UProceduralSpiderGaitComponent::TickStep(FSpiderLegRuntime& Leg, float DeltaTime, float SwingDuration)
 {
 	Leg.StepAlpha += DeltaTime / FMath::Max(0.001f, SwingDuration);
-	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha, 0.f, 1.f);
+	Leg.StepAlpha = FMath::Clamp(Leg.StepAlpha, 0.0f, 1.0f);
 
 	const float A = Leg.StepAlpha;
 
-	const FVector Flat =
-		FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
-
-	const float StepHeightForThisLeg = GetStepHeightForLeg(Leg.LegId);
-
-	const float Lift =
-		FMath::Sin(A * PI) * StepHeightForThisLeg;
-
-	const FVector FootPos =
-		Flat + FVector(0, 0, Lift);
-
 	AActor* Owner = GetOwner();
-	if (!Owner) return;
+	if (!Owner)
+	{
+		return;
+	}
 
 	ACharacter* Character = Cast<ACharacter>(Owner);
-
-	USkeletalMeshComponent* Mesh =
-		Character ? Character->GetMesh() :
-		Owner->FindComponentByClass<USkeletalMeshComponent>();
-
-	if (!Mesh) return;
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!Mesh)
+	{
+		return;
+	}
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
+	const FVector Up = MeshWorld.GetUnitAxis(EAxis::Z).GetSafeNormal();
 
-	const FVector TipPos =
-		FootPos +
-		MeshWorld.TransformVector(Leg.FootToTip_Component);
+	const FVector Flat = FMath::Lerp(Leg.StepStartWorld, Leg.StepEndWorld, A);
+	const float StepHeightForThisLeg = GetStepHeightForLeg(Leg.LegId);
+	const float Lift = FMath::Sin(A * PI) * StepHeightForThisLeg;
+
+	const FVector FootPos = Flat + Up * Lift;
+	const FVector TipPos = FootPos + MeshWorld.TransformVector(Leg.FootToTip_Component);
 
 	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPos);
 
-	if (Leg.StepAlpha >= 1.f)
+	if (Leg.StepAlpha >= 1.0f)
 	{
 		Leg.bStepping = false;
 		Leg.bInStance = true;
 		Leg.bDoneThisGroup = true;
-
 		Leg.PlantedWorld = Leg.StepEndWorld;
 
-		const FVector TipPlanted =
-			Leg.PlantedWorld +
-			MeshWorld.TransformVector(Leg.FootToTip_Component);
-
+		const FVector TipPlanted = Leg.PlantedWorld + MeshWorld.TransformVector(Leg.FootToTip_Component);
 		Leg.IKTargetWorld = FTransform(FQuat::Identity, TipPlanted);
 
 		RemainingInGroup = FMath::Max(0, RemainingInGroup - 1);
 	}
 }
 
-void UProceduralSpiderGaitComponent::UpdateLeg(
-	FSpiderLegRuntime& Leg,
-	float DeltaTime,
-	float)
+void UProceduralSpiderGaitComponent::UpdateLeg(FSpiderLegRuntime& Leg, float DeltaTime, float)
 {
 	AActor* Owner = GetOwner();
-	if (!Owner) return;
+	if (!Owner)
+	{
+		return;
+	}
 
 	ACharacter* Character = Cast<ACharacter>(Owner);
-	USkeletalMeshComponent* Mesh =
-		Character ? Character->GetMesh() :
-		Owner->FindComponentByClass<USkeletalMeshComponent>();
-
-	if (!Mesh) return;
+	USkeletalMeshComponent* Mesh = Character ? Character->GetMesh() : Owner->FindComponentByClass<USkeletalMeshComponent>();
+	if (!Mesh)
+	{
+		return;
+	}
 
 	const FTransform MeshWorld = Mesh->GetComponentTransform();
 
-	// Desired foot contact point in world
 	Leg.DesiredWorld = ComputeDesiredFootPoint(Leg);
 
-	// If currently stepping, continue the step
 	if (Leg.bStepping)
 	{
-		const float SwingDuration =
-			CurrentCycleSeconds *
-			FMath::Clamp(1.f - DutyFactor, 0.05f, 0.45f);
-
+		const float SwingDuration = CurrentCycleSeconds * FMath::Clamp(1.0f - DutyFactor, 0.05f, 0.45f);
 		TickStep(Leg, DeltaTime, SwingDuration);
 		return;
 	}
 
-	// Otherwise keep the foot planted, but drive the tarsus tip target
-	const FVector TipTarget =
-		Leg.PlantedWorld +
-		MeshWorld.TransformVector(Leg.FootToTip_Component);
-
+	const FVector TipTarget = Leg.PlantedWorld + MeshWorld.TransformVector(Leg.FootToTip_Component);
 	Leg.IKTargetWorld = FTransform(FQuat::Identity, TipTarget);
 
 	if (bDrawFootTargets)
 	{
-		DrawDebugSphere(GetWorld(), Leg.PlantedWorld, 40.0f, 12, FColor::Red, false, 0.0f);
-		DrawDebugSphere(GetWorld(), Leg.DesiredWorld, 40.0f, 12, FColor::Green, false, 0.0f);
-		DrawDebugSphere(GetWorld(), TipTarget, 40.0f, 12, FColor::Cyan, false, 0.0f);
+		DrawDebugSphere(GetWorld(), Leg.PlantedWorld, 4.0f, 8, FColor::Red, false, 0.0f);
+		DrawDebugSphere(GetWorld(), Leg.DesiredWorld, 4.0f, 8, FColor::Green, false, 0.0f);
+		DrawDebugSphere(GetWorld(), TipTarget, 4.0f, 8, FColor::Cyan, false, 0.0f);
 	}
 
-	// No commanded motion -> do not start a new step
 	if (CommandedSpeed < 1.0f)
 	{
 		return;
 	}
 
-	// Wrong group -> cannot start
 	const bool bCorrectGroup = (IsLegInGroupA(Leg.LegId) == bGroupASwings);
 	if (!bCorrectGroup)
 	{
 		return;
 	}
 
-	// Already finished this group -> wait for group swap
 	if (Leg.bDoneThisGroup)
 	{
 		return;
 	}
 
-	// Start a step if far enough from desired position
-	const float Dist = FVector::Dist2D(Leg.PlantedWorld, Leg.DesiredWorld);
+	const FVector Up = MeshWorld.GetUnitAxis(EAxis::Z).GetSafeNormal();
+	const FVector DeltaToDesired = FVector::VectorPlaneProject(Leg.DesiredWorld - Leg.PlantedWorld, Up);
+	const float Dist = DeltaToDesired.Size();
+
 	if (Dist > StepTriggerDistance)
 	{
 		BeginStep(Leg, Leg.DesiredWorld);
@@ -345,7 +346,6 @@ void UProceduralSpiderGaitComponent::UpdateLeg(
 
 bool UProceduralSpiderGaitComponent::IsLegInGroupA(ESpiderLeg LegId) const
 {
-	// GroupA: L1 L3 R2 R4
 	return (LegId == ESpiderLeg::L1) || (LegId == ESpiderLeg::L3) || (LegId == ESpiderLeg::R2) || (LegId == ESpiderLeg::R4);
 }
 
@@ -364,9 +364,9 @@ bool UProceduralSpiderGaitComponent::GetIKTarget(ESpiderLeg Leg, FTransform& Out
 			return true;
 		}
 	}
+
 	return false;
 }
-
 
 float UProceduralSpiderGaitComponent::GetStepLengthForLeg(ESpiderLeg LegId) const
 {

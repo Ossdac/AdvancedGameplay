@@ -77,9 +77,7 @@ public:
 	// Controller drives this (units/sec)
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Gait")
 	float CommandedSpeed = 0.f;
-
 	
-
 	// Derived cycle duration
 	float CurrentCycleSeconds = 1.f;
 

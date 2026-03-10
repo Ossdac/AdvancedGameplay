@@ -99,6 +99,53 @@ void UAG_RigidbodyComponent::AddTorque(const FVector& Torque)
 	AccumulatedTorque += Torque;
 }
 
+void UAG_RigidbodyComponent::AddDriveDirectionInput(const FVector& WorldDirection, float InputStrength, float MaxAccelerationCm, float MaxSpeedCm)
+{
+	if (Mass <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const float ClampedInput = FMath::Clamp(InputStrength, -1.0f, 1.0f);
+	if (FMath::IsNearlyZero(ClampedInput))
+	{
+		return;
+	}
+
+	const FVector Up = -GravityDirection.GetSafeNormal();
+
+	FVector WishDir = FVector::VectorPlaneProject(WorldDirection, Up);
+	if (WishDir.IsNearlyZero())
+	{
+		return;
+	}
+	WishDir = WishDir.GetSafeNormal() * FMath::Sign(ClampedInput);
+
+	if (MaxSpeedCm > 0.0f)
+	{
+		const FVector PlanarV = GetPlanarVelocity();
+		const float PlanarSpeed = PlanarV.Size();
+
+		if (PlanarSpeed >= MaxSpeedCm)
+		{
+			const float AlongWish = FVector::DotProduct(PlanarV, WishDir);
+			if (AlongWish > 0.0f)
+			{
+				return;
+			}
+		}
+	}
+
+	const float Accel = FMath::Max(0.0f, MaxAccelerationCm);
+	if (Accel <= SMALL_NUMBER)
+	{
+		return;
+	}
+
+	const FVector Force = WishDir * (Accel * Mass);
+	AddForce(Force);
+}
+
 void UAG_RigidbodyComponent::SetRotationEnabled(bool bEnable, bool bClearSpin)
 {
 	bEnableRotation = bEnable;
@@ -1418,7 +1465,7 @@ void UAG_RigidbodyComponent::ApplyTwoBodyFrictionImpulse(
 	const float MaxStatic  = MuStatic  * NormalImpulseMagnitude;
 	const float MaxDynamic = MuDynamic * NormalImpulseMagnitude;
 
-	float JT = 0.0f;
+	float JT;
 
 	// Static if it can fully cancel slip, otherwise dynamic
 	if (MuStatic > 0.0f && JTNeededAbs <= MaxStatic)

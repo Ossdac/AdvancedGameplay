@@ -1,6 +1,7 @@
 #include "AG_ResultAction.h"
 
 #include "AdvancedGameplay/AG_GameInstance.h"
+#include "AdvancedGameplay/Spider/SpiderCharacter.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/Engine.h"
@@ -19,6 +20,14 @@ void UAG_ResultAction::OnBegin(bool bFirstTime)
 	if (!PC)
 	{
 		return;
+	}
+	
+	ASpiderCharacter* Spider = Cast<ASpiderCharacter>(
+	UGameplayStatics::GetActorOfClass(World, ASpiderCharacter::StaticClass()));
+
+	if (Spider)
+	{
+		Spider->SetGameplayActive(false);
 	}
 
 	PC->SetIgnoreMoveInput(true);
